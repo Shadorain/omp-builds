@@ -1,0 +1,29 @@
+{
+  "name": "omp-builds",
+  "version": "1.0.0",
+  "description": "Keep `cargo auto` builds in the background and show this project's build status under the OMP editor.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Shadorain",
+  "keywords": ["omp", "oh-my-pi", "pi-coding-agent", "extension", "omp-extension", "cargo"],
+  "exports": {
+    ".": "./index.ts"
+  },
+  "omp": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "format": "biome format --write"
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": ">=18.18.6"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.2",
+    "@oh-my-pi/pi-coding-agent": "18.18.6",
+    "@types/bun": "latest",
+    "typescript": "^5.8.0"
+  }
+}
