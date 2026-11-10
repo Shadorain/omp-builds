@@ -1,6 +1,6 @@
 import type { ExtensionContext } from '@oh-my-pi/pi-coding-agent';
 import { truncateToWidth } from '@oh-my-pi/pi-tui';
-import type { DevPin, Step, StepState } from './types';
+import type { DevPin, DevState, Step, StepState } from './types';
 
 export type Theme = ExtensionContext['ui']['theme'];
 
@@ -34,15 +34,26 @@ function chip(theme: Theme, step: Step, frame: number): string {
 	return `${icon(theme, step.state, frame)} ${name}${busy ? theme.fg('muted', ` ${clock(step.start)}${who}`) : ''}`;
 }
 
+const DEV_TONE = {
+	live: 'success',
+	'edits not live': 'warning',
+	rebuilding: 'warning',
+	'not deployed': 'muted',
+	unknown: 'muted',
+} as const satisfies Record<DevState, string>;
+
+/** `dev ● <state>`: the dot is green while the server runs; a down server shows red `down`. */
+export function devChip(theme: Theme, pin: DevPin): string {
+	const light = theme.fg(pin.up ? 'success' : 'error', '●');
+	const here = pin.up ? theme.fg(DEV_TONE[pin.here], pin.here) : theme.fg('error', 'down');
+	return `${theme.fg('muted', 'dev')} ${light} ${here}`;
+}
+
 /** One line: step chips, then the dev server. */
 export function statusLine(theme: Theme, width: number, steps: Step[], pin: DevPin | null, frame: number): string[] {
 	const dot = theme.fg('muted', ' • ');
 	const bar = theme.fg('muted', '  │  ');
-	const parts = [steps.map(s => chip(theme, s, frame)).join(dot)];
-	if (pin) {
-		const light = theme.fg(pin.up ? 'success' : 'error', '●');
-		const here = pin.up ? theme.fg(pin.tone, pin.here) : theme.fg('error', 'down');
-		parts.push(`${theme.fg('muted', 'dev')} ${light} ${here}`);
-	}
+	const parts = steps.length ? [steps.map(s => chip(theme, s, frame)).join(dot)] : [];
+	if (pin) parts.push(devChip(theme, pin));
 	return [truncateToWidth(` ${parts.join(bar)}`, width)];
 }

@@ -21,10 +21,14 @@ export interface Build {
 	root: string | null;
 }
 
+/** What the dev server runs, relative to this checkout. */
+export type DevState = 'live' | 'edits not live' | 'not deployed' | 'rebuilding' | 'unknown';
+
 export interface DevPin {
 	up: boolean;
-	here: string;
-	tone: 'success' | 'warning' | 'muted';
+	here: DevState;
+	/** Tailnet address of the dev UI, or null when tailscale can't name this host. */
+	url: string | null;
 }
 
 /** A supported project, resolved for one checkout. */

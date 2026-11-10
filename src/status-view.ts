@@ -1,12 +1,27 @@
 import { basename } from 'node:path';
 import { truncateToWidth } from '@oh-my-pi/pi-tui';
-import { clock, type Theme } from './status-line';
-import type { Run, RunState } from './types';
+import { clock, devChip, type Theme } from './status-line';
+import type { DevPin, DevState, Run, RunState } from './types';
 
 export interface StatusViewOptions {
 	mainRoot: string | null;
 	currentTree(root: string): string | null;
+	pin: DevPin | null;
 	frame: number;
+}
+
+const DEV_MEANING: Record<DevState, string> = {
+	live: 'serving this checkout as it is now',
+	'edits not live': 'serving your last commit; uncommitted edits are not on it',
+	rebuilding: 'rebuilding with your latest commit',
+	'not deployed': 'serving other code; this branch is not on it',
+	unknown: 'cannot tell what it is serving',
+};
+
+function devRow(theme: Theme, pin: DevPin): string {
+	const meaning = pin.up ? DEV_MEANING[pin.here] : 'server is not running';
+	const url = pin.url ? `  ${theme.fg('accent', pin.url)}` : '';
+	return `${devChip(theme, pin)}${url}  ${theme.fg('muted', meaning)}`;
 }
 
 const SPINNER = ['◐', '◓', '◑', '◒'];
@@ -36,10 +51,13 @@ function badge(theme: Theme, state: RunState, frame: number): string {
 
 const cell = (text: string, width: number) => truncateToWidth(text, width, undefined, true);
 
-/** Every tracked run, running first, then newest first: one row each. */
+/** Every tracked run, running first, then newest first: one row each. The dev server sits at the bottom. */
 export function statusView(theme: Theme, width: number, runs: Run[], options: StatusViewOptions): string[] {
-	if (!runs.length) return [theme.fg('muted', 'No builds tracked in this session yet.')];
-	const { mainRoot, currentTree, frame } = options;
+	const { mainRoot, currentTree, pin, frame } = options;
+	const dev = pin ? ['', devRow(theme, pin)] : [];
+	if (!runs.length) {
+		return [theme.fg('muted', 'No builds tracked in this session yet.'), ...dev].map(l => truncateToWidth(l, width));
+	}
 	const running = runs.filter(r => r.state === 'running');
 	const agents = new Set(running.map(r => `${r.kind}:${r.who}`)).size;
 	const checkouts = new Set(runs.map(r => r.root ?? mainRoot)).size;
@@ -78,5 +96,5 @@ export function statusView(theme: Theme, width: number, runs: Run[], options: St
 			code,
 		].join('  ');
 	});
-	return [header, '', columns, ...rows].map(line => truncateToWidth(line, width));
+	return [header, '', columns, ...rows, ...dev].map(line => truncateToWidth(line, width));
 }

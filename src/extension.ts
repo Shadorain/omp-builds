@@ -203,7 +203,8 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		const nudge = [
 			"omp-builds: this cargo auto runs in the background; the user's status line shows its progress and result.",
 			"Do not wait or poll. Continue with the user's request or end your turn; the result arrives on its own.",
-			'If it fails, spawn one task subagent as the fixer in this checkout with the failing command; do not read the full log here. Report its short yield.',
+			'If it fails, spawn one task subagent as the fixer in this checkout with the failing command; do not read the full log here.',
+			'Do not wait on the fixer: end your turn so the user can keep talking; its yield arrives on its own. Report its short yield then.',
 			`When the code work is done, call ${TOOL} with what you changed and why (no build or test status); call it again if a fixer changes code.`,
 		].join(' ');
 		return { input: { ...piped, async: true, timeout: 0 }, additionalContext: nudge };
@@ -274,7 +275,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 			if (verb === 'status' && !arg) {
 				const mainRoot = project?.root ?? null;
 				return openWindow(ctx, `Builds · ${project?.name ?? ''}`, (theme, width) =>
-					statusView(theme, width, runs, { mainRoot, currentTree, frame }),
+					statusView(theme, width, runs, { mainRoot, currentTree, pin, frame }),
 				);
 			}
 			if (verb !== 'summary' || (arg && arg !== 'last')) return ctx.ui.notify(USAGE, 'info');
