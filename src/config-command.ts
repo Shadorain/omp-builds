@@ -20,17 +20,27 @@ import { checkoutRoot, matchProject } from './projects';
 import { services } from './servers';
 import type { Theme } from './status-line';
 import { openWindow } from './window';
+import type { ArgNode } from './completions';
 
 export const CONFIG_USAGE = 'Usage: /builds config [add | remove [name] | build add [command] | build remove | edit]';
 
-export const CONFIG_COMPLETIONS = [
-	{ value: 'config', label: 'config', description: 'Show the configuration: builds and auto-loaded projects' },
-	{ value: 'config add', label: 'config add', description: 'Auto-load omp-builds in this repository' },
-	{ value: 'config remove', label: 'config remove', description: 'Stop auto-loading a project' },
-	{ value: 'config build add ', label: 'config build add', description: 'Track another build command, e.g. pnpm' },
-	{ value: 'config build remove', label: 'config build remove', description: 'Stop tracking a build command' },
-	{ value: 'config edit', label: 'config edit', description: 'Edit the whole JSON file' },
-];
+export const CONFIG_ARGS: ArgNode = {
+	word: 'config',
+	description: 'Show or change the configuration: builds and auto-loaded projects',
+	next: [
+		{ word: 'add', description: 'Auto-load omp-builds in this repository' },
+		{ word: 'remove', description: 'Stop auto-loading a project' },
+		{
+			word: 'build',
+			description: 'Track or stop tracking build commands',
+			next: [
+				{ word: 'add', description: 'Track another build command, e.g. pnpm' },
+				{ word: 'remove', description: 'Stop tracking a build command' },
+			],
+		},
+		{ word: 'edit', description: 'Edit the whole JSON file' },
+	],
+};
 
 function buildRow(theme: Theme, b: BuildConfig): string {
 	const muted = (s: string) => theme.fg('muted', s);

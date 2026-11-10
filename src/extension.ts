@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@oh-my-pi/pi-coding-agent';
 import { buildsFor, type Config, DEFAULT_CONFIG, loadConfig } from './config';
-import { CONFIG_COMPLETIONS, configCommand } from './config-command';
+import { type ArgNode, completeArgs } from './completions';
+import { CONFIG_ARGS, configCommand } from './config-command';
 import { treeStamp } from './git';
 import { scanBuilds } from './procs';
 import { checkoutRoot, projectFor, projectKey } from './projects';
@@ -40,6 +41,17 @@ const STAMP_DELAY_MS = 750;
 
 const USAGE = 'Usage: /builds status | /builds summary [last] | /builds clear | /builds config';
 const NOT_HERE = 'omp-builds is not enabled in this repository. /builds config add turns it on here.';
+
+const BUILDS_ARGS: ArgNode[] = [
+	{ word: 'status', description: 'Every tracked build, with who, where and how long' },
+	{
+		word: 'summary',
+		description: 'Pick a work summary to show',
+		next: [{ word: 'last', description: 'Show the latest work summary' }],
+	},
+	{ word: 'clear', description: 'Clear finished builds' },
+	CONFIG_ARGS,
+];
 
 // Compiled once per config and project; a changed file is a new config object.
 const matchers = new WeakMap<Config, Map<string | null, BuildMatcher>>();
@@ -288,16 +300,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 
 	pi.registerCommand('builds', {
 		description: 'Builds for this project: status | summary [last] | clear | config',
-		getArgumentCompletions: prefix => {
-			const items = [
-				{ value: 'status', label: 'status', description: 'Every tracked build, with who, where and how long' },
-				{ value: 'summary ', label: 'summary', description: 'Pick a work summary to show' },
-				{ value: 'summary last', label: 'summary last', description: 'Show the latest work summary' },
-				{ value: 'clear', label: 'clear', description: 'Clear finished builds' },
-				...CONFIG_COMPLETIONS,
-			].filter(item => item.value.startsWith(prefix.trimStart()));
-			return items.length ? items : null;
-		},
+		getArgumentCompletions: prefix => completeArgs(BUILDS_ARGS, prefix),
 		handler: async (args, ctx) => {
 			const words = args.trim().split(/\s+/).filter(Boolean);
 			const [verb, arg] = words;
