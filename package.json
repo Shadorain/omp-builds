@@ -1,11 +1,19 @@
 {
   "name": "omp-builds",
   "version": "1.0.0",
-  "description": "Keep `cargo auto` builds in the background and show this project's build status under the OMP editor.",
+  "description": "Runs your agent's builds in the background and shows their status, plus your dev server's, under the OMP editor.",
   "type": "module",
   "license": "MIT",
   "author": "Shadorain",
-  "keywords": ["omp", "oh-my-pi", "pi-coding-agent", "extension", "omp-extension", "cargo"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Shadorain/omp-builds.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Shadorain/omp-builds/issues"
+  },
+  "homepage": "https://github.com/Shadorain/omp-builds#readme",
+  "keywords": ["omp", "oh-my-pi", "pi-coding-agent", "extension", "omp-extension", "builds", "cargo", "dev-server"],
   "exports": {
     ".": "./index.ts"
   },
@@ -15,7 +23,8 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "format": "biome format --write"
+    "format": "biome format --write",
+    "screens": "bun scripts/capture-screens.ts"
   },
   "peerDependencies": {
     "@oh-my-pi/pi-coding-agent": ">=18.18.6"
@@ -24,6 +33,8 @@
     "@biomejs/biome": "2.6.2",
     "@oh-my-pi/pi-coding-agent": "18.18.6",
     "@types/bun": "latest",
+    "@xterm/headless": "^6.0.0",
+    "puppeteer-core": "25.3.0",
     "typescript": "^5.8.0"
   }
 }

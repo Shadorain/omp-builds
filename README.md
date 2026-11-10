@@ -1,74 +1,157 @@
 # omp-builds
 
-OMP extension for webapp and studio sessions. It moves `cargo auto` builds to the background so the session stays free. A single status line under the editor shows the project's builds and the dev server.
+An [OMP](https://github.com/can1357/oh-my-pi) extension that keeps your agent's builds off the critical path. In the repositories you turn it on for, every `cargo test` (or whatever build command you configure) the agent runs goes to the background, the turn ends, and one line under the editor shows each step's latest result in every checkout, plus what your dev server is serving. When a turn changed code, the agent's final reply stays open above the editor as a work summary.
 
-```
- ✓ check • ⚒ test 0:11 Dash • ✗ test@bl-demo-api • ◐ clippy 0:04 other pane  │  dev ● not deployed
-```
+![The work summary above the editor while a test runs here and a check runs in a worktree](docs/screens/running.webp)
 
-## Status line
+## How it works
 
-Each step (`check`, `test`, `clippy`, …) shows its latest outcome:
+- **Builds go to the background.** In the interactive main session, a bash call that runs the build command becomes a background job with no timeout. The agent is told not to wait or poll, and to send one fixer subagent if the build fails. You keep prompting while builds and fixes run; results arrive on their own.
+- **One status line per project.** Each step (`check`, `test`, `clippy`, …) shows its latest outcome. Builds in other worktrees carry the worktree name (`check@demo-api`), builds started by other OMP sessions in the same repository show as `other pane`, and a build run by a systemd unit carries the unit name.
+- **Dev server awareness.** If the project has a shared dev server running as a systemd user unit, the line says whether it serves this checkout, with its tailnet link in `/builds status`. Other user units named after the project that listen on a port (PR previews, Storybook) are listed too.
+- **Work summaries.** After a turn that edited files (directly or through a subagent), the agent's final reply opens as rendered Markdown above the editor. It stays while you type and is replaced by the next one; Esc closes it.
+- **Off everywhere else.** Outside configured repositories the extension does nothing: no rewrite, no line, no window.
 
-| Icon | Meaning |
-|---|---|
-| ◐ | running, with elapsed time |
-| ⚒ | being fixed by a subagent, with time and fixer name |
-| ✓ | passed |
-| ✗ | failed |
-| ■ | cancelled |
+`/builds status` lists every tracked build, which checkout it built, and whether the code changed since:
 
-- Each checkout keeps its own steps. A step built outside this session's checkout carries its worktree name, as in `test@bl-demo-api`. Freshness is judged against that worktree's own code.
-- A gray step name means the code changed after that result was built.
-- `other pane` is a build started by another session in the same repo, including its worktrees. Builds in other repos never show. A build run by a systemd unit instead of a session carries the unit's name, e.g. `◐ build 3:10 studio-dev` while the studio dev server redeploys.
-- `dev ●` is the shared dev server (`webapp-dev`, `studio`). The dot is green while its service runs; a stopped server shows a red dot and `down`. The word says what the server runs compared with this checkout:
+![/builds status with a failed and two passed runs, the dev server and a preview server](docs/screens/status.webp)
 
-| State | Meaning |
-|---|---|
-| `live` | Serving this checkout as it is now |
-| `edits not live` | Serving your last commit; uncommitted edits are not on it |
-| `rebuilding 3:12` | studio only: `studio-dev.service` is redeploying your latest commit; the old build serves until it finishes. Not a build of this session |
-| `behind` | studio only: serving an older build of this checkout and no redeploy is running; run `deploy/dev-deploy` |
-| `not deployed` | Serving other code; this branch is not on it. webapp dev only runs `origin/v2/backend-rewrite` |
-| `unknown` | Cannot tell what it is serving |
-| `down` | The service is not running |
+## Requirements
 
-- Other servers: any running user service named `<project>*` (e.g. `webapp-refresh-3001`, made with `systemd-run --user --unit …`) whose working directory is inside one of the project's checkouts and that listens on a port. One running from this checkout adds `• :3001 ●` after the dev chip.
-
-`/builds status` lists them on its last rows: the dev server, then every other server with its tailnet link and the checkout it runs from. Links use the host's MagicDNS name: `https://` when `tailscale serve` fronts the port, else `http://` for ports not bound to loopback.
-
-## What it does to the agent
-
-- In the interactive main session, `cargo auto …` runs as a background job with no timeout. The agent is told not to wait or poll, and to send one fixer subagent if the build fails without waiting on it. Its turn ends, so you can keep sending ordinary prompts while builds and fixes run; results and the fixer's report arrive on their own.
-- Subagents and `async: false` calls stay in the foreground. Their results still appear on the status line.
-- After a turn that changed code (here or in a subagent), the agent's final reply opens as the work summary in a window above the editor, rendered as markdown. It is sticky: it stays while you type, send prompts and ask questions, until a newer summary replaces it or you press Esc. While it is up, a reply the agent makes on its own (a build or fixer reporting in) replaces it, so it never goes stale. A reply too tall for the window is cut, with the rest in the chat.
-
-## Windows
-
-`/builds status` and the work summary open in a temporary window above the editor, built like `/btw`'s panel. The window takes no focus, so typing still goes to the prompt. Esc closes it, and opening another window replaces it. Esc on `/builds status` brings back the summary it covered.
-
-## Commands
-
-| Command | Does |
-|---|---|
-| `/builds status` | Every tracked build: state, steps, who, checkout, how long, when, and whether the code changed since. Last row: the dev server and its link |
-| `/builds summary last` | Show the latest work summary |
-| `/builds summary` | Pick one of the summaries shown since this session was opened here, and show it. Kept in memory only: a restart, `/resume` or `/new` starts the list empty |
-| `/builds clear` | Clear finished results from the status line |
+- OMP 18.18.6 or later.
+- Linux: running builds and servers are read from `/proc`, `ss` and `systemctl --user`.
+- Git.
+- Optional: [Tailscale](https://tailscale.com/) for dev-server links (`https://` when `tailscale serve` fronts the port).
 
 ## Install
 
-```bash
-bun install
-ln -sfn "$PWD" ~/.omp/agent/extensions/omp-builds
+From the OMP marketplace:
+
+```text
+/marketplace add Shadorain/omp-builds
+/marketplace install builds@omp-builds
 ```
 
-OMP loads extensions when a session starts. Start a new session after changing the code.
+Or clone it into the extensions directory:
 
-## Adding a project
+```bash
+git clone https://github.com/Shadorain/omp-builds.git ~/.omp/agent/extensions/omp-builds
+```
 
-Add an entry to `PROJECTS` in `src/projects.ts`. Each entry needs:
-- a name, which also prefixes the systemd units searched for extra servers;
-- a regex that matches the `origin` URL;
-- the shared dev server's unit;
-- a function that reports what that server runs compared with a checkout.
+Restart OMP after installing or updating. `/reload-plugins` does not reload extension code.
+
+## Quick start
+
+1. Open OMP in a repository with an `origin` remote.
+2. Run `/builds config add`. Name the project, then pick its dev server from the user units listening on a port, or none. The repository is now auto-loaded: every checkout and worktree whose `origin` matches.
+3. Ask the agent to run the tests. The status line appears under the editor.
+4. Using something other than `cargo`? `/builds config build just`, `/builds config build make`, or any prefix whose next word is the step.
+
+![The /builds config window](docs/screens/config.webp)
+
+## Status line
+
+| Icon | Meaning |
+| --- | --- |
+| ◐ | Running, with elapsed time |
+| ⚒ | A subagent is fixing it, with time and the fixer's name |
+| ✓ | Passed |
+| ✗ | Failed |
+| ■ | Cancelled |
+
+A gray step name means the code changed after that result was built. Each checkout keeps its own steps and is judged against its own code.
+
+## Dev server states
+
+`dev ●` is green while the unit runs. The word compares what it serves with this checkout:
+
+| State | Meaning |
+| --- | --- |
+| `live` | Serving this checkout as it is now |
+| `edits not live` | Serving your last commit; uncommitted edits are not on it |
+| `not deployed` | Serving other code; this branch is not on it |
+| `rebuilding 3:12` | `redeployUnit` is running; the old build serves until it finishes |
+| `behind` | Serving an older build of this checkout (by `builtStamp`) and no redeploy is running |
+| `up` | Running; set `deployedShaFile` or `servedCheckoutFile` to compare it with this checkout |
+| `unknown` | Cannot tell what it serves |
+| `down` | The unit is not running |
+
+Two ways to tell what a server runs: `deployedShaFile` for a server that deploys one commit (this checkout is on it when its `HEAD` is that commit or an ancestor), or `servedCheckoutFile` for a server that runs from a checkout. With `builtStamp`, a served checkout counts as live only once a build of its stamped paths finishes.
+
+A server unit named `<project>*` that runs from this checkout adds `• :3001 ●` after the dev chip.
+
+## Commands
+
+| Command | Use it to |
+| --- | --- |
+| `/builds status` | List every tracked build and the project's servers |
+| `/builds summary` | Pick one of this session's work summaries and show it |
+| `/builds summary last` | Show the latest work summary |
+| `/builds clear` | Clear finished results from the status line |
+| `/builds config` | Show the configuration |
+| `/builds config add` | Auto-load the current repository |
+| `/builds config remove [name]` | Stop auto-loading a project |
+| `/builds config build <command>` | Set the build command |
+| `/builds config edit` | Edit the JSON in OMP's editor, validated on save |
+
+## Configuration
+
+Settings live in `~/.omp/agent/omp-builds.json` (under `PI_CODING_AGENT_DIR` when set) and reload when the file changes. Missing keys take their defaults.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `build.command` | `cargo` | Command prefix the agent types; the next word is the step |
+| `build.process` | `build.command` | Process argv prefix that runs a step, when it differs (a wrapper that execs another binary) |
+| `build.steps` | `build`, `check`, `test`, `clippy`, `nextest`, `bench`, `doc` | Only these steps count; every word does when absent |
+| `projects[].name` | | Shown in the UI; also the prefix of user units searched for extra servers |
+| `projects[].origin` | | Case-insensitive regex tested against the `origin` URL |
+| `projects[].devServer.unit` | | systemd user unit of the shared dev server |
+| `projects[].devServer.deployedShaFile` | | File holding the commit the server runs |
+| `projects[].devServer.servedCheckoutFile` | | File holding the path of the checkout the server runs |
+| `projects[].devServer.builtStamp` | | `{ file, paths }`: stamp of the last build, `git rev-parse HEAD:<paths> \| sha1sum \| cut -c1-12` |
+| `projects[].devServer.redeployUnit` | | Unit that rebuilds and restarts the server |
+
+Paths may start with `~/`.
+
+```json
+{
+	"build": { "command": "cargo" },
+	"projects": [
+		{
+			"name": "api",
+			"origin": "[/:]acme/api(\\.git)?$",
+			"devServer": { "unit": "api-dev", "deployedShaFile": "~/.local/share/api-dev/deployed" }
+		},
+		{
+			"name": "web",
+			"origin": "[/:]acme/web(\\.git)?$",
+			"devServer": {
+				"unit": "web",
+				"servedCheckoutFile": "~/.local/share/web-dev/checkout",
+				"builtStamp": { "file": "~/.local/share/web-dev/built", "paths": ["Cargo.lock", "crates"] },
+				"redeployUnit": "web-dev"
+			}
+		}
+	]
+}
+```
+
+Your deploy script writes the files: the commit it deployed, or the checkout it serves and the stamp of what it built.
+
+## Development
+
+```bash
+git clone https://github.com/Shadorain/omp-builds.git
+cd omp-builds
+bun install
+bun test
+bun run typecheck
+bun run format     # Biome, formatter only: tabs, single quotes, 120 columns
+bun run screens    # recapture docs/screens/ from the real TUI (needs omp, python3, systemd user units and Chromium)
+```
+
+`bun run screens` drives a real `omp` against a scripted local model, a stub `cargo` and two transient user units in a throwaway repository. Contributor rules are in [AGENTS.md](AGENTS.md).
+
+## License
+
+[MIT](LICENSE)

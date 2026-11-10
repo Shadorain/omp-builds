@@ -1,0 +1,26 @@
+{
+  "name": "omp-builds",
+  "owner": {
+    "name": "Shadorain"
+  },
+  "metadata": {
+    "description": "Background builds and a build and dev server status line for OMP",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "builds",
+      "description": "Runs your agent's builds in the background and shows their status, plus your dev server's, under the OMP editor.",
+      "version": "1.0.0",
+      "license": "MIT",
+      "homepage": "https://github.com/Shadorain/omp-builds",
+      "repository": "https://github.com/Shadorain/omp-builds",
+      "category": "productivity",
+      "keywords": ["omp", "omp-extension", "builds", "cargo", "dev-server"],
+      "author": {
+        "name": "Shadorain"
+      },
+      "source": "./"
+    }
+  ]
+}
