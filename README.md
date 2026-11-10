@@ -53,7 +53,7 @@ Each step (`check`, `test`, `clippy`, …) shows its latest outcome:
 |---|---|
 | `/builds status` | Every tracked build: state, steps, who, checkout, how long, when, and whether the code changed since. Last row: the dev server and its link |
 | `/builds summary last` | Show the latest work summary |
-| `/builds summary` | Pick any summary from this session, across every branch of its tree, and show it |
+| `/builds summary` | Pick one of the summaries shown since this session was opened here, and show it. Kept in memory only: a restart, `/resume` or `/new` starts the list empty |
 | `/builds clear` | Clear finished results from the status line |
 
 ## Install

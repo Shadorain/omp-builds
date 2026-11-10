@@ -25,7 +25,7 @@ Run format, then test and typecheck, before a commit.
 |`src/status-line.ts`|Status line rendering|
 |`src/status-view.ts`|`/builds status` rows|
 |`src/window.ts`|Temporary window: `OverlayPanel` in the above-editor layout, Esc via raw input|
-|`src/summary.ts`|Summary entries, summary window, picker|
+|`src/summary.ts`|Final-reply extraction, summary window, picker (summaries live in memory only)|
 
 ## Rules
 

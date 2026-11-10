@@ -5,7 +5,7 @@ import { checkoutRoot, projectFor, projectKey } from './projects';
 import { statusLine } from './status-line';
 import { statusView } from './status-view';
 import { buildDir, CARGO_AUTO, mergeSteps, stepsOf, withPipefail } from './steps';
-import { answeredUser, finalReply, openSummary, pickSummary, readSummaries, SUMMARY_ENTRY } from './summary';
+import { answeredUser, finalReply, openSummary, pickSummary } from './summary';
 import { BuildTracker, settleForeground, startForeground } from './tracker';
 import type { Build, DevPin, Foreground, Project, Run, Step, Summary } from './types';
 import { closeWindow, openWindow, windowOpen } from './window';
@@ -41,7 +41,9 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	let trees = new Map<string, string | null>();
 	let runs: Run[] = [];
 	let steps: Step[] = [];
+	// Summaries shown since this process opened the session; a resumed or switched-to session starts empty.
 	let summaries: Summary[] = [];
+	let summarySession: string | null = null;
 	let editsSeen = 0;
 	let shownSummary: Summary | null = null;
 	let frame = 0;
@@ -145,8 +147,12 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	async function restore(ctx: ExtensionContext): Promise<void> {
 		ctxRef = ctx;
 		project = await projectFor(ctx.cwd);
-		// Every branch of the session tree, so summaries survive /tree and /branch moves.
-		summaries = readSummaries(ctx.sessionManager.getEntries() as unknown[]);
+		const sessionId = ctx.sessionManager.getSessionId();
+		if (sessionId !== summarySession) {
+			summarySession = sessionId;
+			summaries = [];
+			shownSummary = null;
+		}
 		editsSeen = project ? (edits.get(project.key) ?? 0) : 0;
 		tracker.reset();
 		closeWindow();
@@ -240,7 +246,6 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		editsSeen = count;
 		const summary: Summary = { text, at: new Date().toISOString() };
 		summaries.push(summary);
-		pi.appendEntry(SUMMARY_ENTRY, summary);
 		showSummary(ctx, summary);
 	});
 
