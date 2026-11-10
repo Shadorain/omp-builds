@@ -38,13 +38,24 @@ export function finalReply(messages: readonly unknown[]): string | null {
 	return null;
 }
 
+/** Whether the newest input the agent answered was the user's, not a job result or other injected message. */
+export function answeredUser(messages: readonly unknown[]): boolean {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i];
+		const role = m && typeof m === 'object' && 'role' in m ? m.role : null;
+		if (role === 'assistant' || role === 'toolResult') continue;
+		return role === 'user';
+	}
+	return false;
+}
+
 const when = (at: string) =>
 	new Date(at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 /** Show `summary` as markdown in the temporary window until Esc. */
 export function openSummary(ctx: ExtensionContext, summary: Summary): void {
 	const body = new Markdown(summary.text, 0, 0, getMarkdownTheme());
-	openWindow(ctx, `Work summary · ${when(summary.at)}`, (theme, width) => {
+	openWindow(ctx, 'summary', `Work summary · ${when(summary.at)}`, (theme, width) => {
 		const lines = body.render(width);
 		const max = Math.max(MIN_ROWS, (process.stdout.rows ?? 40) - RESERVED_ROWS);
 		if (lines.length <= max) return lines;
@@ -53,11 +64,11 @@ export function openSummary(ctx: ExtensionContext, summary: Summary): void {
 	});
 }
 
-/** Pick one summary from a list, newest first, and open it. */
-export async function pickSummary(ctx: ExtensionContext, summaries: Summary[]): Promise<void> {
+/** Pick one summary from a list, newest first. */
+export async function pickSummary(ctx: ExtensionContext, summaries: Summary[]): Promise<Summary | null> {
 	const newest = [...summaries].reverse();
 	const labels = newest.map((s, i) => `${i + 1}. ${when(s.at)}  ${s.text.split('\n')[0]}`);
 	const picked = await ctx.ui.select('Work summaries', labels);
 	const index = picked === undefined ? -1 : labels.indexOf(picked);
-	if (index >= 0) openSummary(ctx, newest[index]);
+	return index >= 0 ? newest[index] : null;
 }

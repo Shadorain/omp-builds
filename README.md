@@ -38,11 +38,11 @@ Each step (`check`, `test`, `clippy`, …) shows its latest outcome:
 
 - In the interactive main session, `cargo auto …` runs as a background job with no timeout. The agent is told not to wait or poll, and to send one fixer subagent if the build fails without waiting on it. Its turn ends, so you can keep sending ordinary prompts while builds and fixes run; results and the fixer's report arrive on their own.
 - Subagents and `async: false` calls stay in the foreground. Their results still appear on the status line.
-- After a turn that changed code (here or in a subagent), the agent's final reply opens as the work summary in a window above the editor, rendered as markdown. It stays until Esc. A reply too tall for the window is cut, with the rest in the chat.
+- After a turn that changed code (here or in a subagent), the agent's final reply opens as the work summary in a window above the editor, rendered as markdown. It is sticky: it stays while you type, send prompts and ask questions, until a newer summary replaces it or you press Esc. While it is up, a reply the agent makes on its own (a build or fixer reporting in) replaces it, so it never goes stale. A reply too tall for the window is cut, with the rest in the chat.
 
 ## Windows
 
-`/builds status` and the work summary open in a temporary window above the editor, built like `/btw`'s panel. The window takes no focus, so typing still goes to the prompt. Esc closes it, and opening another window replaces it.
+`/builds status` and the work summary open in a temporary window above the editor, built like `/btw`'s panel. The window takes no focus, so typing still goes to the prompt. Esc closes it, and opening another window replaces it. Esc on `/builds status` brings back the summary it covered.
 
 ## Commands
 

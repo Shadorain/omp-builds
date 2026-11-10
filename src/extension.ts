@@ -5,10 +5,10 @@ import { checkoutRoot, projectFor, projectKey } from './projects';
 import { statusLine } from './status-line';
 import { statusView } from './status-view';
 import { buildDir, CARGO_AUTO, mergeSteps, stepsOf, withPipefail } from './steps';
-import { finalReply, openSummary, pickSummary, readSummaries, SUMMARY_ENTRY } from './summary';
+import { answeredUser, finalReply, openSummary, pickSummary, readSummaries, SUMMARY_ENTRY } from './summary';
 import { BuildTracker, settleForeground, startForeground } from './tracker';
 import type { Build, DevPin, Foreground, Project, Run, Step, Summary } from './types';
-import { closeWindow, openWindow } from './window';
+import { closeWindow, openWindow, windowOpen } from './window';
 
 const WIDGET = 'omp-builds';
 // Tools that change files: a turn that used one, here or in a subagent, ends with a summary window.
@@ -43,6 +43,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	let steps: Step[] = [];
 	let summaries: Summary[] = [];
 	let editsSeen = 0;
+	let shownSummary: Summary | null = null;
 	let frame = 0;
 	let lastScan = 0;
 	let lastSlow = 0;
@@ -215,20 +216,28 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		settleForeground(event.toolCallId, event.isError || (typeof code === 'number' && code !== 0));
 	});
 
-	// The agent's own final reply, after a turn that changed code. Pops up once the agent stops,
-	// so it never lands in the middle of a reply.
+	// Shows a summary and remembers it, so the status window can hand the screen back to it.
+	function showSummary(ctx: ExtensionContext, summary: Summary): void {
+		shownSummary = summary;
+		openSummary(ctx, summary);
+	}
+
+	// The agent's own final reply, after a turn that changed code. While a summary is still up,
+	// a turn the agent ran on its own (a finished build or fixer reporting in) replaces it too, so
+	// the window never goes stale; a turn the user started without edits leaves it alone.
+	// Pops up once the agent stops, so it never lands in the middle of a reply.
 	pi.on('agent_end', async event => {
 		const ctx = live();
 		if (!ctx || !project) return;
 		const count = edits.get(project.key) ?? 0;
-		if (count === editsSeen) return;
+		if (count === editsSeen && (answeredUser(event.messages) || !windowOpen('summary'))) return;
 		const text = finalReply(event.messages);
 		if (!text) return;
 		editsSeen = count;
 		const summary: Summary = { text, at: new Date().toISOString() };
 		summaries.push(summary);
 		pi.appendEntry(SUMMARY_ENTRY, summary);
-		openSummary(ctx, summary);
+		showSummary(ctx, summary);
 	});
 
 	pi.registerCommand('builds', {
@@ -251,14 +260,20 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 			}
 			if (verb === 'status' && !arg) {
 				const mainRoot = project?.root ?? null;
-				return openWindow(ctx, `Builds · ${project?.name ?? ''}`, (theme, width) =>
-					statusView(theme, width, runs, { mainRoot, currentTree, pin, frame }),
+				// The summary is sticky: Esc on the status window brings it back.
+				const under = windowOpen('summary') ? shownSummary : null;
+				return openWindow(
+					ctx,
+					'status',
+					`Builds · ${project?.name ?? ''}`,
+					(theme, width) => statusView(theme, width, runs, { mainRoot, currentTree, pin, frame }),
+					under ? () => showSummary(ctx, under) : undefined,
 				);
 			}
 			if (verb !== 'summary' || (arg && arg !== 'last')) return ctx.ui.notify(USAGE, 'info');
 			if (!summaries.length) return ctx.ui.notify('No work summaries in this session yet.', 'info');
-			if (arg === 'last') openSummary(ctx, summaries.at(-1) as Summary);
-			else await pickSummary(ctx, summaries);
+			const summary = arg === 'last' ? (summaries.at(-1) as Summary) : await pickSummary(ctx, summaries);
+			if (summary) showSummary(ctx, summary);
 		},
 	});
 }
