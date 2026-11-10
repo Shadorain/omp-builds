@@ -91,7 +91,7 @@ A server unit named `<project>*` that runs from this checkout adds `â€¢ :3001 â—
 | `/builds config` | Show the configuration |
 | `/builds config add` | Auto-load the current repository |
 | `/builds config remove [name]` | Stop auto-loading a project |
-| `/builds config build <command>` | Set the build command |
+| `/builds config build <command>` | Set the build command; resets `build.process` and `build.steps` to that command's defaults |
 | `/builds config edit` | Edit the JSON in OMP's editor, validated on save |
 
 ## Configuration
@@ -102,7 +102,7 @@ Settings live in `~/.omp/agent/omp-builds.json` (under `PI_CODING_AGENT_DIR` whe
 | --- | --- | --- |
 | `build.command` | `cargo` | Command prefix the agent types; the next word is the step |
 | `build.process` | `build.command` | Process argv prefix that runs a step, when it differs (a wrapper that execs another binary) |
-| `build.steps` | `build`, `check`, `test`, `clippy`, `nextest`, `bench`, `doc` | Only these steps count; every word does when absent |
+| `build.steps` | `build`, `check`, `test`, `clippy`, `nextest`, `bench`, `doc` with `cargo`, else unset | Only these steps count; every word does when unset |
 | `projects[].name` | | Shown in the UI; also the prefix of user units searched for extra servers |
 | `projects[].origin` | | Case-insensitive regex tested against the `origin` URL |
 | `projects[].devServer.unit` | | systemd user unit of the shared dev server |

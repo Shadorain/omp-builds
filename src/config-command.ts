@@ -4,6 +4,7 @@ import { truncateToWidth } from '@oh-my-pi/pi-tui';
 import {
 	type Config,
 	configPath,
+	DEFAULT_CONFIG,
 	formatConfig,
 	type LoadedConfig,
 	loadConfig,
@@ -146,8 +147,11 @@ export async function configCommand(
 	if (verb === 'add' && !rest.length) return add(ctx, config, onChange);
 	if (verb === 'remove' && rest.length <= 1) return remove(ctx, config, rest[0], onChange);
 	if (verb === 'build' && rest.length) {
-		const next = { ...config, build: { ...config.build, command: rest.join(' '), process: undefined } };
-		return save(ctx, next, `Build command: ${rest.join(' ')} <step>.`, onChange);
+		const command = rest.join(' ');
+		// The default step list names cargo subcommands; another tool's steps are its own.
+		const build = command === DEFAULT_CONFIG.build.command ? DEFAULT_CONFIG.build : { command };
+		const limit = build.steps ? '' : ' Every step counts; limit them with build.steps in /builds config edit.';
+		return save(ctx, { ...config, build }, `Build command: ${command} <step>.${limit}`, onChange);
 	}
 	ctx.ui.notify(CONFIG_USAGE, 'info');
 }
