@@ -62,6 +62,8 @@ export interface MergeOptions {
 /** The latest outcome per step and checkout, ordered by when each first appeared. */
 export function mergeSteps(runs: Run[], { mainRoot, currentTree, fixers, maxSteps }: MergeOptions): Step[] {
 	const latest = new Map<string, Step>();
+	// Keys whose step failed in that checkout before the run now shown: a subagent rebuilding it is fixing it.
+	const failedBefore = new Set<string>();
 	const order: string[] = [];
 	for (const run of [...runs].sort((a, b) => a.start - b.start)) {
 		const root = run.root ?? mainRoot;
@@ -71,12 +73,14 @@ export function mergeSteps(runs: Run[], { mainRoot, currentTree, fixers, maxStep
 		for (const outcome of expand(run)) {
 			const key = where ? `${outcome.name}@${where}` : outcome.name;
 			if (!order.includes(key)) order.push(key);
+			const prev = latest.get(key);
+			if (prev) failedBefore[prev.state === 'failed' ? 'add' : 'delete'](key);
 			latest.set(key, { ...outcome, where, root, stale });
 		}
 	}
 	return order.slice(-maxSteps).map(key => {
 		const step = latest.get(key) as Step;
-		if (step.state === 'running' && step.kind === 'sub') return { ...step, state: 'fixing' };
+		if (step.state === 'running' && step.kind === 'sub' && failedBefore.has(key)) return { ...step, state: 'fixing' };
 		if (step.state !== 'failed') return step;
 		const fixer = fixers.find(
 			f => (f.root === null || (f.root ?? mainRoot) === step.root) && f.start >= (step.end ?? 0) - 1_000,

@@ -112,9 +112,22 @@ describe('mergeSteps', () => {
 		]);
 	});
 
-	test("a subagent's own running build shows as fixing", () => {
-		const fixerRun = run({ steps: ['test'], state: 'running', kind: 'sub', who: 'Dash', end: undefined });
-		expect(merge([fixerRun])).toEqual([['test', 'fixing', false]]);
+	test("a subagent's running build is a fix only after that step failed in the same checkout", () => {
+		const sub: Partial<Run> = {
+			steps: ['test'],
+			state: 'running',
+			kind: 'sub',
+			who: 'Dash',
+			start: 20,
+			end: undefined,
+		};
+		const failed = run({ steps: ['test'], state: 'failed', start: 0, end: 10 });
+		expect(merge([run(sub)])).toEqual([['test', 'running', false]]);
+		expect(merge([failed, run(sub)])).toEqual([['test', 'fixing', false]]);
+		expect(merge([failed, run({ ...sub, root: '/src/wt-api' })])).toEqual([
+			['test', 'failed', false],
+			['test@wt-api', 'running', false],
+		]);
 	});
 
 	test('a run that vanished without a status shows nothing', () => {
