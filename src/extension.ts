@@ -1,12 +1,14 @@
 import { type ExtensionAPI, type ExtensionContext, z } from '@oh-my-pi/pi-coding-agent';
 import { treeStamp } from './git';
 import { scanBuilds } from './procs';
-import { projectFor, projectKey } from './projects';
+import { checkoutRoot, projectFor, projectKey } from './projects';
 import { statusLine } from './status-line';
-import { CARGO_AUTO, stepsOf } from './steps';
+import { statusView } from './status-view';
+import { buildDir, CARGO_AUTO, mergeSteps, stepsOf, withPipefail } from './steps';
 import { openSummary, pickSummary, readSummaries, SUMMARY_ENTRY } from './summary';
 import { BuildTracker, settleForeground, startForeground } from './tracker';
-import type { Build, DevPin, Project, Step, Summary } from './types';
+import type { Build, DevPin, Foreground, Project, Run, Step, Summary } from './types';
+import { closeWindow, openWindow } from './window';
 
 const WIDGET = 'omp-builds';
 const TOOL = 'work_summary';
@@ -15,12 +17,13 @@ const SCAN_BUSY_MS = 3_000;
 const SCAN_IDLE_MS = 5_000;
 const SLOW_BUSY_MS = 5_000;
 const SLOW_IDLE_MS = 30_000;
-const SUMMARY_POPUP_MS = 60_000;
+const MAX_STEPS = 6;
+const MAX_STAMPED_ROOTS = 6;
 // Edits issued in the same turn as a build run alongside its tool_call hook; stamping a beat
 // later records the tree cargo-auto actually syncs.
 const STAMP_DELAY_MS = 750;
 
-const USAGE = 'Usage: /builds summary [last] | /builds clear';
+const USAGE = 'Usage: /builds status | /builds summary [last] | /builds clear';
 
 // Fixers, mission workers and other SDK sessions keep foreground builds and show nothing.
 const isMain = (ctx: ExtensionContext) => ctx.hasUI === true && ctx.mode === 'tui' && ctx.agent?.kind !== 'sub';
@@ -30,7 +33,9 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	let ctxRef: ExtensionContext | null = null;
 	let project: Project | null = null;
 	let pin: DevPin | null = null;
-	let currentTree: string | null = null;
+	// Current working-tree stamp of each checkout runs built in, the session's own first.
+	let trees = new Map<string, string | null>();
+	let runs: Run[] = [];
 	let steps: Step[] = [];
 	let summaries: Summary[] = [];
 	let summaryUnseen = false;
@@ -45,11 +50,19 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 
 	/** The main session's context while it sits in a supported project. */
 	const live = () => (ctxRef && project && isMain(ctxRef) ? ctxRef : null);
+	const currentTree = (root: string) => trees.get(root) ?? null;
 
 	function render(): void {
 		const ctx = live();
 		if (!ctx) return;
-		steps = tracker.steps(ctx.getAsyncJobSnapshot?.(), currentTree);
+		const snapshot = ctx.getAsyncJobSnapshot?.();
+		runs = tracker.runs(snapshot);
+		steps = mergeSteps(runs, {
+			mainRoot: project?.root ?? null,
+			currentTree,
+			fixers: tracker.fixers(snapshot),
+			maxSteps: MAX_STEPS,
+		});
 		const want = steps.length > 0;
 		if (want !== lineShown) {
 			lineShown = want;
@@ -68,11 +81,29 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		requestRender?.();
 	}
 
+	/** Builds in this project's checkouts (any worktree), each with its checkout root. */
 	async function inProject(found: Build[]): Promise<Build[]> {
-		const keep = await Promise.all(
-			found.map(async b => b.owner === process.pid || (!!b.cwd && (await projectKey(b.cwd)) === project?.key)),
+		const resolved = await Promise.all(
+			found.map(async b => {
+				if (!b.cwd) return null;
+				const mine = b.owner === process.pid;
+				if (!mine && (await projectKey(b.cwd)) !== project?.key) return null;
+				return { ...b, root: await checkoutRoot(b.cwd) };
+			}),
 		);
-		return found.filter((_, i) => keep[i]);
+		return resolved.filter(b => b !== null);
+	}
+
+	async function refreshSlow(ctx: ExtensionContext): Promise<void> {
+		const roots = [project?.root, ...runs.map(r => r.root)].filter((r): r is string => !!r);
+		const unique = [...new Set(roots)].slice(0, MAX_STAMPED_ROOTS);
+		const [stamps, devPin] = await Promise.all([
+			Promise.all(unique.map(async root => [root, await treeStamp(root)] as const)),
+			project?.devPin() ?? null,
+		]);
+		if (ctx !== ctxRef) return;
+		trees = new Map(stamps);
+		pin = devPin;
 	}
 
 	function tick(): void {
@@ -95,15 +126,10 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		if (!refreshing && now - lastSlow >= (busy ? SLOW_BUSY_MS : SLOW_IDLE_MS)) {
 			refreshing = true;
 			lastSlow = now;
-			void Promise.all([treeStamp(ctx.cwd), project?.devPin() ?? null])
-				.then(([tree, devPin]) => {
-					currentTree = tree;
-					pin = devPin;
-				})
-				.finally(() => {
-					refreshing = false;
-					render();
-				});
+			void refreshSlow(ctx).finally(() => {
+				refreshing = false;
+				render();
+			});
 		}
 		render();
 	}
@@ -121,10 +147,11 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		summaries = readSummaries(ctx.sessionManager.getBranch() as unknown[]);
 		summaryUnseen = false;
 		tracker.reset();
+		closeWindow();
 		if (lineShown) ctx.ui.setWidget(WIDGET, undefined);
 		lineShown = false;
 		pin = null;
-		currentTree = null;
+		trees = new Map();
 		await setToolActive(project !== null && isMain(ctx));
 		if (!live()) return;
 		timer ??= ctx.setInterval(tick, FRAME_MS);
@@ -145,25 +172,33 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		if (!CARGO_AUTO.test(command) || !(await projectFor(ctx.cwd))) return;
 		const sub = ctx.agent?.kind === 'sub';
 		if (!sub && !isMain(ctx)) return;
-		const tree = Bun.sleep(STAMP_DELAY_MS).then(() => treeStamp(ctx.cwd));
+		const toolCwd = typeof input.cwd === 'string' ? input.cwd : undefined;
+		const stampRoot = await checkoutRoot(buildDir(command, ctx.cwd, toolCwd));
+		const tree = Bun.sleep(STAMP_DELAY_MS).then(() => (stampRoot ? treeStamp(stampRoot) : null));
+		const piped = { ...input, command: withPipefail(command) };
 		if (sub || input.async === false) {
-			const run = {
+			const run: Foreground = {
+				id: event.toolCallId,
+				command,
 				steps: stepsOf(command),
 				live: null,
-				state: 'running' as const,
+				state: 'running',
 				who: sub ? (ctx.agent?.id ?? ctx.agent?.name ?? 'fixer') : 'main',
-				kind: sub ? ('sub' as const) : ('main' as const),
+				kind: sub ? 'sub' : 'main',
 				start: Date.now(),
-				tree: null as string | null,
+				root: stampRoot,
+				tree: null,
+				stampRoot,
 				missing: 0,
 			};
-			startForeground(event.toolCallId, run);
+			startForeground(run);
 			void tree.then(t => {
-				run.tree = t;
+				// A process seen in another checkout restamps the run; keep that stamp.
+				if (run.stampRoot === stampRoot) run.tree = t;
 			});
-			return;
+			return piped.command === command ? undefined : { input: piped };
 		}
-		tracker.expect(command, tree);
+		tracker.expect(command, stampRoot, tree);
 		lastScan = 0;
 		const nudge = [
 			"omp-builds: this cargo auto runs in the background; the user's status line shows its progress and result.",
@@ -171,7 +206,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 			'If it fails, spawn one task subagent as the fixer in this checkout with the failing command; do not read the full log here. Report its short yield.',
 			`When the code work is done, call ${TOOL} with what you changed and why (no build or test status); call it again if a fixer changes code.`,
 		].join(' ');
-		return { input: { ...input, async: true, timeout: 0 }, additionalContext: nudge };
+		return { input: { ...piped, async: true, timeout: 0 }, additionalContext: nudge };
 	});
 
 	pi.on('tool_result', async event => {
@@ -179,13 +214,13 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		settleForeground(event.toolCallId, event.isError || (typeof code === 'number' && code !== 0));
 	});
 
-	// Pops up once the agent stops, so it never covers a reply still streaming in.
+	// Pops up once the agent stops, so it never lands in the middle of a reply.
 	pi.on('agent_end', async () => {
 		const ctx = live();
 		const last = summaries.at(-1);
 		if (!ctx || !summaryUnseen || !last) return;
 		summaryUnseen = false;
-		openSummary(ctx, last, SUMMARY_POPUP_MS);
+		openSummary(ctx, last);
 	});
 
 	const summarySchema = z.object({
@@ -219,12 +254,13 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand('builds', {
-		description: 'Build status for this project: summary [last] | clear',
+		description: 'Builds for this project: status | summary [last] | clear',
 		getArgumentCompletions: prefix => {
 			const items = [
+				{ value: 'status', label: 'status', description: 'Every tracked build, with who, where and how long' },
 				{ value: 'summary ', label: 'summary', description: 'Pick a work summary to show' },
 				{ value: 'summary last', label: 'summary last', description: 'Show the latest work summary' },
-				{ value: 'clear', label: 'clear', description: 'Clear finished builds from the status line' },
+				{ value: 'clear', label: 'clear', description: 'Clear finished builds' },
 			].filter(item => item.value.startsWith(prefix.trimStart()));
 			return items.length ? items : null;
 		},
@@ -234,6 +270,12 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 			if (verb === 'clear' && !arg) {
 				tracker.clear();
 				return render();
+			}
+			if (verb === 'status' && !arg) {
+				const mainRoot = project?.root ?? null;
+				return openWindow(ctx, `Builds · ${project?.name ?? ''}`, (theme, width) =>
+					statusView(theme, width, runs, { mainRoot, currentTree, frame }),
+				);
 			}
 			if (verb !== 'summary' || (arg && arg !== 'last')) return ctx.ui.notify(USAGE, 'info');
 			if (!summaries.length) return ctx.ui.notify('No work summaries in this session yet.', 'info');

@@ -17,6 +17,8 @@ export interface Build {
 	/** Pid of the nearest `omp` ancestor: the session that started the build. */
 	owner: number | null;
 	cwd: string | null;
+	/** Checkout (worktree) root the build runs in. */
+	root: string | null;
 }
 
 export interface DevPin {
@@ -40,6 +42,8 @@ export type RunKind = 'main' | 'sub' | 'other';
 
 /** One `cargo auto` command; a chain (`check && test`) covers several steps. */
 export interface Run {
+	id: string;
+	command: string;
 	steps: string[];
 	/** The step whose process was last seen running. */
 	live: string | null;
@@ -48,13 +52,18 @@ export interface Run {
 	kind: RunKind;
 	start: number;
 	end?: number;
+	/** Checkout root the run built; null until its process is seen, meaning the session's own. */
+	root: string | null;
 	/** Working-tree stamp the run built. */
 	tree: string | null;
 }
 
-/** The latest outcome of one step name, as the status line shows it. */
+/** The latest outcome of one step in one checkout, as the status line shows it. */
 export interface Step {
 	name: string;
+	/** Worktree label when the step ran outside the session's own checkout. */
+	where: string | null;
+	root: string | null;
 	state: StepState;
 	who: string;
 	kind: RunKind;
@@ -67,6 +76,8 @@ export interface Step {
 /** A build that ran in the foreground: a subagent's, or the main agent's `async: false` escape hatch. */
 export interface Foreground extends Run {
 	kind: 'main' | 'sub';
+	/** Checkout `tree` was stamped from; restamped once the process shows it built elsewhere. */
+	stampRoot: string | null;
 	/** Scans in a row that found no process for this run. */
 	missing: number;
 }
@@ -75,6 +86,8 @@ export interface Foreground extends Run {
 export interface Fixer {
 	who: string;
 	start: number;
+	/** Checkout it works in; null when unknown (a task job), which matches any failure. */
+	root: string | null;
 }
 
 export interface Summary {

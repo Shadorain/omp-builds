@@ -1,11 +1,9 @@
 import type { ExtensionContext } from '@oh-my-pi/pi-coding-agent';
-import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@oh-my-pi/pi-tui';
-import type { Theme } from './status-line';
+import { wrapTextWithAnsi } from '@oh-my-pi/pi-tui';
 import type { Summary } from './types';
+import { openWindow } from './window';
 
 export const SUMMARY_ENTRY = 'omp-builds.summary';
-const WINDOW = 'omp-builds-summary';
-const MAX_WIDTH = 100;
 
 /** Work summaries saved on this branch, oldest first. */
 export function readSummaries(branch: unknown[]): Summary[] {
@@ -23,60 +21,11 @@ export function readSummaries(branch: unknown[]): Summary[] {
 const when = (at: string) =>
 	new Date(at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-/** A window over the transcript, like `/btw`'s. Esc closes it; typing keeps going to the prompt. */
-class SummaryWindow {
-	constructor(
-		private readonly theme: Theme,
-		private readonly summary: Summary,
-	) {}
-
-	render(width: number): string[] {
-		const { theme } = this;
-		const w = Math.min(width, MAX_WIDTH);
-		if (w < 20) return [];
-		const inner = w - 4;
-		const border = (s: string) => theme.fg('borderAccent', s);
-		const title = ` ${theme.bold('Work summary')} `;
-		const stamp = ` ${theme.fg('muted', when(this.summary.at))} `;
-		const top = `${border('╭─')}${title}${border('─'.repeat(Math.max(1, w - 4 - visibleWidth(title) - visibleWidth(stamp))))}${stamp}${border('─╮')}`;
-		const row = (text: string) => `${border('│')} ${truncateToWidth(text, inner, undefined, true)} ${border('│')}`;
-		const body = this.summary.text.split('\n').flatMap(line => wrapTextWithAnsi(line.trimEnd(), inner));
-		return [
-			top,
-			...body.map(row),
-			row(''),
-			row(theme.fg('muted', 'esc close · /builds summary to browse')),
-			border(`╰${'─'.repeat(w - 2)}╯`),
-		];
-	}
-
-	invalidate(): void {}
-}
-
-// One window at a time: opening another closes the current one.
-let closeOpen: (() => void) | null = null;
-
-/**
- * Show `summary` above the editor, where `/btw` draws its panel, until Esc or `autoCloseMs`.
- * It sits in the layout instead of an overlay so it never covers the editor, and it takes no
- * focus, so typing keeps going to the prompt; Esc is caught from raw terminal input.
- */
-export function openSummary(ctx: ExtensionContext, summary: Summary, autoCloseMs?: number): void {
-	closeOpen?.();
-	const stopListening = ctx.ui.onTerminalInput(data => {
-		if (!matchesKey(data, 'escape')) return undefined;
-		close();
-		return { consume: true };
-	});
-	const timer = autoCloseMs ? setTimeout(() => close(), autoCloseMs) : undefined;
-	const close = () => {
-		clearTimeout(timer);
-		stopListening();
-		if (closeOpen === close) closeOpen = null;
-		ctx.ui.setWidget(WINDOW, undefined);
-	};
-	closeOpen = close;
-	ctx.ui.setWidget(WINDOW, (_tui, theme) => new SummaryWindow(theme, summary), { placement: 'aboveEditor' });
+/** Show `summary` in the temporary window until Esc. */
+export function openSummary(ctx: ExtensionContext, summary: Summary): void {
+	openWindow(ctx, `Work summary · ${when(summary.at)}`, (_theme, width) =>
+		summary.text.split('\n').flatMap(line => wrapTextWithAnsi(line.trimEnd(), width)),
+	);
 }
 
 /** Pick one summary from a list, newest first, and open it. */

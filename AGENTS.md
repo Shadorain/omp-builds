@@ -17,12 +17,14 @@ Run format, then test and typecheck, before a commit.
 |File|Owns|
 |---|---|
 |`src/extension.ts`|Event wiring, tick loop, `work_summary` tool, `/builds` command|
-|`src/projects.ts`|Supported projects, project detection, dev-server pins|
+|`src/projects.ts`|Supported projects, project detection, checkout roots, dev-server pins|
 |`src/procs.ts`|`/proc` scan for running `cargo-auto` processes and their owning `omp`|
-|`src/tracker.ts`|Job snapshot + shared foreground registry + scan → runs|
-|`src/steps.ts`|Pure: runs → one latest outcome per step (tested)|
+|`src/tracker.ts`|Job snapshot + shared foreground registry + scan → runs, each with its checkout|
+|`src/steps.ts`|Pure: runs → one latest outcome per step and checkout (tested)|
 |`src/status-line.ts`|Status line rendering|
-|`src/summary.ts`|Summary entries, the summary window, the picker|
+|`src/status-view.ts`|`/builds status` rows|
+|`src/window.ts`|Temporary window: `OverlayPanel` in the above-editor layout, Esc via raw input|
+|`src/summary.ts`|Summary entries, summary window, picker|
 
 ## Rules
 

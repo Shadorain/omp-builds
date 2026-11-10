@@ -1,0 +1,82 @@
+import { basename } from 'node:path';
+import { truncateToWidth } from '@oh-my-pi/pi-tui';
+import { clock, type Theme } from './status-line';
+import type { Run, RunState } from './types';
+
+export interface StatusViewOptions {
+	mainRoot: string | null;
+	currentTree(root: string): string | null;
+	frame: number;
+}
+
+const SPINNER = ['◐', '◓', '◑', '◒'];
+const MAX_ROWS = 14;
+
+function ago(ms: number): string {
+	const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+	if (s < 60) return `${s}s ago`;
+	if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+	return `${Math.floor(s / 3600)}h ago`;
+}
+
+function badge(theme: Theme, state: RunState, frame: number): string {
+	switch (state) {
+		case 'running':
+			return `${theme.fg('accent', SPINNER[frame % SPINNER.length])} running`;
+		case 'completed':
+			return `${theme.fg('success', '✓')} passed `;
+		case 'failed':
+			return `${theme.fg('error', '✗')} failed `;
+		case 'cancelled':
+			return `${theme.fg('muted', '■')} stopped`;
+		case 'finished':
+			return `${theme.fg('muted', '·')} ended  `;
+	}
+}
+
+const cell = (text: string, width: number) => truncateToWidth(text, width, undefined, true);
+
+/** Every tracked run, running first, then newest first: one row each. */
+export function statusView(theme: Theme, width: number, runs: Run[], options: StatusViewOptions): string[] {
+	if (!runs.length) return [theme.fg('muted', 'No builds tracked in this session yet.')];
+	const { mainRoot, currentTree, frame } = options;
+	const running = runs.filter(r => r.state === 'running');
+	const agents = new Set(running.map(r => `${r.kind}:${r.who}`)).size;
+	const checkouts = new Set(runs.map(r => r.root ?? mainRoot)).size;
+	const header = theme.fg(
+		'muted',
+		`${running.length} running · ${agents} agent${agents === 1 ? '' : 's'} building · ${checkouts} checkout${checkouts === 1 ? '' : 's'}`,
+	);
+	const columns = theme.fg(
+		'muted',
+		`${cell('state', 9)}  ${cell('steps', 22)}  ${cell('who', 10)}  ${cell('checkout', 16)}  ${cell('took', 5)}  ${cell('started', 8)}  code`,
+	);
+	const rank = (r: Run) => (r.state === 'running' ? 0 : 1);
+	const sorted = [...runs].sort((a, b) => rank(a) - rank(b) || b.start - a.start).slice(0, MAX_ROWS);
+	const rows = sorted.map(run => {
+		const root = run.root ?? mainRoot;
+		const steps =
+			run.steps.length > 1 && run.live && run.state !== 'completed'
+				? run.steps.map(s => (s === run.live ? `[${s}]` : s)).join(' → ')
+				: run.steps.join(' → ');
+		const current = root ? currentTree(root) : null;
+		const code =
+			run.kind === 'other' && !run.tree
+				? theme.fg('muted', 'other pane')
+				: !run.tree || !current
+					? ''
+					: run.tree === current
+						? theme.fg('success', 'current')
+						: theme.fg('warning', 'changed since');
+		return [
+			cell(badge(theme, run.state, frame), 9),
+			cell(steps, 22),
+			theme.fg(run.kind === 'sub' ? 'accent' : 'text', cell(run.who, 10)),
+			theme.fg(root === mainRoot ? 'muted' : 'text', cell(root ? basename(root) : '?', 16)),
+			cell(clock(run.start, run.end), 5),
+			theme.fg('muted', cell(ago(run.start), 8)),
+			code,
+		].join('  ');
+	});
+	return [header, '', columns, ...rows].map(line => truncateToWidth(line, width));
+}

@@ -1,10 +1,11 @@
-import { CARGO_AUTO, mergeSteps, stepsOf } from './steps';
-import type { Build, Fixer, Foreground, Job, Run, RunState, Step } from './types';
+import { treeStamp } from './git';
+import { CARGO_AUTO, stepsOf } from './steps';
+import type { Build, Fixer, Foreground, Job, Run, RunState } from './types';
 
 const MAX_OWN_JOBS = 8;
-const MAX_FOREGROUND = 8;
+const MAX_FOREGROUND = 12;
+const MAX_OTHERS = 8;
 const MAX_PENDING = 20;
-const MAX_STEPS = 5;
 const RUN_STATES: RunState[] = ['running', 'completed', 'failed', 'cancelled', 'finished'];
 const FOREGROUND_KEY = Symbol.for('omp-builds.foreground');
 
@@ -12,8 +13,8 @@ const FOREGROUND_KEY = Symbol.for('omp-builds.foreground');
 // map, so the main status line sees fixers' foreground builds with their real exit status.
 const foreground = ((globalThis as Record<symbol, unknown>)[FOREGROUND_KEY] ??= new Map()) as Map<string, Foreground>;
 
-export function startForeground(toolCallId: string, run: Foreground): void {
-	foreground.set(toolCallId, run);
+export function startForeground(run: Foreground): void {
+	foreground.set(run.id, run);
 	const done = [...foreground]
 		.filter(([, f]) => f.state !== 'running')
 		.sort(([, a], [, b]) => (a.end ?? 0) - (b.end ?? 0));
@@ -31,105 +32,164 @@ const jobCommand = (job: Job) => job.command ?? job.label ?? '';
 
 interface PendingStamp {
 	command: string;
+	root: string | null;
 	tree: Promise<string | null>;
+}
+
+interface JobMeta {
+	stampRoot: string | null;
+	tree: string | null;
+	root: string | null;
+	live: string | null;
 }
 
 type Snapshot = { running: Job[]; recent: Job[] } | null | undefined;
 
-/** Turns the session's job snapshot, the shared foreground map and the process scan into steps. */
+/** Turns the session's job snapshot, the shared foreground map and the process scan into runs. */
 export class BuildTracker {
 	/** This project's running `cargo auto` processes, from the last scan. */
 	builds: Build[] = [];
 	#clearedAt = 0;
 	#pending: PendingStamp[] = [];
-	#trees = new Map<string, string | null>();
-	#live = new Map<string, string>();
+	#meta = new Map<string, JobMeta>();
 	// Delivered jobs leave the snapshot; keep their last state so the line still shows the result.
 	#seen = new Map<string, Job>();
+	// Other sessions' builds, kept after their process exits so /builds status can list them.
+	#others = new Map<number, Run>();
 
 	reset(): void {
 		this.#seen.clear();
-		this.#trees.clear();
-		this.#live.clear();
+		this.#meta.clear();
+		this.#others.clear();
 	}
 
-	/** Drop finished results from the line; running builds stay. */
+	/** Drop finished results; running builds stay. */
 	clear(): void {
 		this.#clearedAt = Date.now();
 		for (const [id, job] of this.#seen) if (job.status !== 'running') this.#seen.delete(id);
+		for (const [pid, run] of this.#others) if (run.state !== 'running') this.#others.delete(pid);
 	}
 
 	/** A backgrounded command is about to start; its tree stamp lands on the job once it shows up. */
-	expect(command: string, tree: Promise<string | null>): void {
-		this.#pending.push({ command, tree });
+	expect(command: string, root: string | null, tree: Promise<string | null>): void {
+		this.#pending.push({ command, root, tree });
 		if (this.#pending.length > MAX_PENDING) this.#pending.shift();
 	}
 
 	setBuilds(builds: Build[]): void {
 		this.builds = builds;
+		const mine = new Set(builds.filter(b => b.owner === process.pid).map(b => b.step));
 		// A subagent aborted mid-build never reports a result; once its process is gone, stop the spinner.
-		const live = new Set(builds.filter(b => b.owner === process.pid).map(b => b.step));
 		for (const run of foreground.values()) {
 			if (run.state !== 'running' || Date.now() - run.start < 10_000) continue;
-			run.missing = run.steps.some(s => live.has(s)) ? 0 : run.missing + 1;
+			run.missing = run.steps.some(s => mine.has(s)) ? 0 : run.missing + 1;
 			if (run.missing >= 3) Object.assign(run, { state: 'finished', end: Date.now() });
 		}
-	}
-
-	steps(snapshot: Snapshot, currentTree: string | null): Step[] {
-		const claimed = new Set<number>();
-		// Which step of a running command is live, from the cargo-auto process it spawned.
-		const liveStep = (steps: string[], start: number) => {
-			const proc = this.builds.find(
-				b => b.owner === process.pid && !claimed.has(b.pid) && steps.includes(b.step) && b.start >= start - 2_000,
-			);
-			if (proc) claimed.add(proc.pid);
-			return proc?.step ?? null;
-		};
-
-		const runs: Run[] = [];
-		for (const job of this.#ownJobs(snapshot)) {
-			const steps = stepsOf(jobCommand(job));
-			const live = job.status === 'running' ? liveStep(steps, job.startTime ?? 0) : null;
-			if (live) this.#live.set(job.id, live);
-			runs.push({
-				steps,
-				live: this.#live.get(job.id) ?? null,
-				state: RUN_STATES.find(s => s === job.status) ?? 'failed',
-				who: 'main',
-				kind: 'main',
-				start: job.startTime ?? Date.now(),
-				end: job.status === 'running' ? undefined : job.endTime,
-				tree: this.#trees.get(job.id) ?? null,
-			});
-		}
-		for (const run of foreground.values()) {
-			if (run.state !== 'running' && (run.end ?? 0) <= this.#clearedAt) continue;
-			if (run.state === 'running') run.live = liveStep(run.steps, run.start) ?? run.live;
-			runs.push(run);
-		}
-		for (const b of this.builds) {
+		const alive = new Set<number>();
+		for (const b of builds) {
 			if (b.owner === process.pid) continue;
-			runs.push({
+			alive.add(b.pid);
+			if (this.#others.has(b.pid)) continue;
+			this.#others.set(b.pid, {
+				id: `pid:${b.pid}`,
+				command: `cargo auto ${b.step}`,
 				steps: [b.step],
 				live: b.step,
 				state: 'running',
 				who: 'other pane',
 				kind: 'other',
 				start: b.start,
+				root: b.root,
 				tree: null,
 			});
 		}
+		// Their exit status is not visible from here.
+		for (const [pid, run] of this.#others) {
+			if (run.state === 'running' && !alive.has(pid)) Object.assign(run, { state: 'finished', end: Date.now() });
+		}
+		const old = [...this.#others]
+			.filter(([, r]) => r.state !== 'running')
+			.sort(([, a], [, b]) => (a.end ?? 0) - (b.end ?? 0));
+		for (const [pid] of old.slice(0, Math.max(0, this.#others.size - MAX_OTHERS))) this.#others.delete(pid);
+	}
 
-		const fixers: Fixer[] = [
+	/** Every tracked run of this session, its subagents and the project's other sessions. */
+	runs(snapshot: Snapshot): Run[] {
+		const claimed = new Set<number>();
+		// The cargo-auto process a running command spawned: which step is live and where it builds.
+		// A run whose checkout is known only takes a process in that checkout, so parallel builds of
+		// the same step in different worktrees never swap places.
+		const claim = (steps: string[], start: number, root: string | null) => {
+			const proc = this.builds.find(
+				b =>
+					b.owner === process.pid &&
+					!claimed.has(b.pid) &&
+					steps.includes(b.step) &&
+					b.start >= start - 2_000 &&
+					(root === null || b.root === root),
+			);
+			if (proc) claimed.add(proc.pid);
+			return proc;
+		};
+		const restamp = (meta: { stampRoot: string | null; tree: string | null }, root: string | null) => {
+			if (!root || root === meta.stampRoot) return;
+			meta.stampRoot = root;
+			void treeStamp(root).then(tree => {
+				meta.tree = tree;
+			});
+		};
+
+		const runs: Run[] = [];
+		for (const job of this.#ownJobs(snapshot)) {
+			const steps = stepsOf(jobCommand(job));
+			const meta = this.#meta.get(job.id) ?? { stampRoot: null, tree: null, root: null, live: null };
+			this.#meta.set(job.id, meta);
+			const proc = job.status === 'running' ? claim(steps, job.startTime ?? 0, meta.root) : undefined;
+			if (proc) {
+				meta.live = proc.step;
+				meta.root = proc.root ?? meta.root;
+				restamp(meta, proc.root);
+			}
+			runs.push({
+				id: job.id,
+				command: jobCommand(job),
+				steps,
+				live: meta.live,
+				state: RUN_STATES.find(s => s === job.status) ?? 'failed',
+				who: 'main',
+				kind: 'main',
+				start: job.startTime ?? Date.now(),
+				end: job.status === 'running' ? undefined : job.endTime,
+				root: meta.root,
+				tree: meta.tree,
+			});
+		}
+		for (const run of foreground.values()) {
+			if (run.state !== 'running' && (run.end ?? 0) <= this.#clearedAt) continue;
+			const proc = run.state === 'running' ? claim(run.steps, run.start, run.root) : undefined;
+			if (proc) {
+				run.live = proc.step;
+				run.root = proc.root ?? run.root;
+				restamp(run, proc.root);
+			}
+			runs.push(run);
+		}
+		for (const run of this.#others.values()) {
+			if (run.state === 'running' || (run.end ?? 0) > this.#clearedAt) runs.push(run);
+		}
+		return runs;
+	}
+
+	/** Subagents working right now: their builds, and running task jobs. */
+	fixers(snapshot: Snapshot): Fixer[] {
+		return [
 			...[...foreground.values()]
 				.filter(f => f.kind === 'sub' && f.state === 'running')
-				.map(f => ({ who: f.who, start: f.start })),
+				.map(f => ({ who: f.who, start: f.start, root: f.root })),
 			...(snapshot?.running ?? [])
 				.filter(j => j.type === 'task')
-				.map(j => ({ who: j.label ?? 'fixer', start: j.startTime ?? Date.now() })),
+				.map(j => ({ who: j.label ?? 'fixer', start: j.startTime ?? Date.now(), root: null })),
 		];
-		return mergeSteps(runs, { currentTree, fixers, maxSteps: MAX_STEPS });
 	}
 
 	#ownJobs(snapshot: Snapshot): Job[] {
@@ -144,17 +204,20 @@ export class BuildTracker {
 		}
 		for (const job of live) {
 			this.#seen.set(job.id, job);
-			if (this.#trees.has(job.id)) continue;
+			if (this.#meta.has(job.id)) continue;
 			const i = this.#pending.findIndex(p => p.command === jobCommand(job) || jobCommand(job).includes(p.command));
 			if (i < 0) continue;
-			this.#trees.set(job.id, null);
-			this.#pending.splice(i, 1)[0].tree.then(tree => this.#trees.has(job.id) && this.#trees.set(job.id, tree));
+			const [stamp] = this.#pending.splice(i, 1);
+			const meta: JobMeta = { stampRoot: stamp.root, tree: null, root: stamp.root, live: null };
+			this.#meta.set(job.id, meta);
+			void stamp.tree.then(tree => {
+				if (meta.stampRoot === stamp.root) meta.tree = tree;
+			});
 		}
 		const jobs = [...this.#seen.values()].sort((a, b) => (b.startTime ?? 0) - (a.startTime ?? 0));
 		for (const old of jobs.slice(MAX_OWN_JOBS)) {
 			this.#seen.delete(old.id);
-			this.#trees.delete(old.id);
-			this.#live.delete(old.id);
+			this.#meta.delete(old.id);
 		}
 		return jobs.slice(0, MAX_OWN_JOBS);
 	}

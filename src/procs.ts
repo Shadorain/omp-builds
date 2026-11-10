@@ -61,6 +61,8 @@ export async function scanBuilds(): Promise<Build[]> {
 			start: (await stat(pid))?.start ?? Date.now(),
 			owner: chain.find(p => basename(argvs.get(p)?.[0] ?? '') === 'omp') ?? null,
 			cwd: await readlink(`/proc/${pid}/cwd`).catch(() => null),
+			// Resolved by the caller: a git call per build does not belong in the scan.
+			root: null,
 		});
 	}
 	return builds;

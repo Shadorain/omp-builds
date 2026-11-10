@@ -28,7 +28,8 @@ function icon(theme: Theme, state: StepState, frame: number): string {
 
 function chip(theme: Theme, step: Step, frame: number): string {
 	const busy = step.state === 'running' || step.state === 'fixing';
-	const name = step.stale ? theme.fg('muted', step.name) : step.name;
+	const label = step.where ? `${step.name}@${step.where}` : step.name;
+	const name = step.stale ? theme.fg('muted', label) : label;
 	const who = step.kind === 'main' ? '' : ` ${step.who}`;
 	return `${icon(theme, step.state, frame)} ${name}${busy ? theme.fg('muted', ` ${clock(step.start)}${who}`) : ''}`;
 }

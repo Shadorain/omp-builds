@@ -74,6 +74,17 @@ async function detect(cwd: string): Promise<Project | null> {
 	return { name: def.name, root, key, devPin: () => def.devPin(root) };
 }
 
+const roots = new Map<string, Promise<string | null>>();
+/** Top level of the checkout (worktree) `dir` is in. Cached per directory. */
+export function checkoutRoot(dir: string): Promise<string | null> {
+	let root = roots.get(dir);
+	if (!root) {
+		root = git(dir, 'rev-parse', '--show-toplevel');
+		roots.set(dir, root);
+	}
+	return root;
+}
+
 const projects = new Map<string, Promise<Project | null>>();
 /** The supported project `cwd` belongs to, or null. Cached per directory for the process lifetime. */
 export function projectFor(cwd: string): Promise<Project | null> {
