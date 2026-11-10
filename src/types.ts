@@ -35,7 +35,7 @@ export interface DevServer {
 }
 
 /** What the dev server runs, relative to this checkout. */
-export type DevState = 'live' | 'edits not live' | 'not deployed' | 'rebuilding' | 'behind' | 'unknown';
+export type DevState = 'live' | 'edits not live' | 'not deployed' | 'rebuilding' | 'behind' | 'up' | 'unknown';
 
 export interface DevPin {
 	up: boolean;

@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { buildDir, mergeSteps, stepsOf, withPipefail } from '../src/steps';
+import { buildDir, buildMatcher, mergeSteps, processStep, stepsOf, withPipefail } from '../src/steps';
 import type { Run } from '../src/types';
 
 const MAIN = '/src/repo';
+const AUTO = buildMatcher({ command: 'cargo auto', process: 'cargo-auto auto' });
+const CARGO = buildMatcher({ command: 'cargo', steps: ['build', 'check', 'test'] });
 
 const run = (over: Partial<Run>): Run => ({
 	id: 'r',
@@ -28,20 +30,36 @@ const merge = (runs: Run[], over: Partial<Parameters<typeof mergeSteps>[1]> = {}
 
 describe('stepsOf', () => {
 	test('reads every step of a chained command', () => {
-		expect(stepsOf('cd x && cargo auto check && cargo auto test -p api; echo done')).toEqual(['check', 'test']);
+		expect(stepsOf(AUTO, 'cd x && cargo auto check && cargo auto test -p api; echo done')).toEqual(['check', 'test']);
+	});
+
+	test('a step list limits what counts, and a toolchain or flag is not a step', () => {
+		expect(stepsOf(CARGO, 'cargo fmt && cargo +nightly test && cargo --version')).toEqual(['test']);
+		expect(stepsOf(CARGO, 'cargo auto test')).toEqual([]);
+	});
+});
+
+describe('processStep', () => {
+	test('matches the process words anywhere in argv, so interpreters and paths do not hide it', () => {
+		expect(processStep(AUTO, ['/home/u/.local/bin/cargo-auto', 'auto', '+nightly', 'test', '-p', 'api'])).toBe('test');
+		expect(processStep(AUTO, ['bash', '/tmp/bin/cargo-auto', 'auto', 'clippy'])).toBe('clippy');
+		expect(processStep(AUTO, ['cargo-auto', 'sync'])).toBeNull();
+		expect(processStep(CARGO, ['/usr/bin/cargo', 'fmt'])).toBeNull();
 	});
 });
 
 describe('buildDir', () => {
 	test('the tool cwd wins over the session directory, and a leading cd applies on top', () => {
-		expect(buildDir('cargo auto test', '/src/repo')).toBe('/src/repo');
-		expect(buildDir('cargo auto test', '/src/repo', '../wt-api')).toBe('/src/wt-api');
-		expect(buildDir('cd /src/wt-ui && cargo auto test', '/src/repo')).toBe('/src/wt-ui');
-		expect(buildDir('cd "crates/api" && cargo auto test', '/src/repo', '/src/wt-api')).toBe('/src/wt-api/crates/api');
+		expect(buildDir(AUTO, 'cargo auto test', '/src/repo')).toBe('/src/repo');
+		expect(buildDir(AUTO, 'cargo auto test', '/src/repo', '../wt-api')).toBe('/src/wt-api');
+		expect(buildDir(AUTO, 'cd /src/wt-ui && cargo auto test', '/src/repo')).toBe('/src/wt-ui');
+		expect(buildDir(AUTO, 'cd "crates/api" && cargo auto test', '/src/repo', '/src/wt-api')).toBe(
+			'/src/wt-api/crates/api',
+		);
 	});
 
 	test('a cd after the build does not move it', () => {
-		expect(buildDir('cargo auto test && cd /tmp && ls', '/src/repo')).toBe('/src/repo');
+		expect(buildDir(AUTO, 'cargo auto test && cd /tmp && ls', '/src/repo')).toBe('/src/repo');
 	});
 });
 

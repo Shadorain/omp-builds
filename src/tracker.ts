@@ -1,5 +1,5 @@
 import { treeStamp } from './git';
-import { CARGO_AUTO, stepsOf } from './steps';
+import { type BuildMatcher, isBuild, stepsOf } from './steps';
 import type { Build, Fixer, Foreground, Job, Run, RunState } from './types';
 
 const MAX_OWN_JOBS = 8;
@@ -47,7 +47,10 @@ type Snapshot = { running: Job[]; recent: Job[] } | null | undefined;
 
 /** Turns the session's job snapshot, the shared foreground map and the process scan into runs. */
 export class BuildTracker {
-	/** This project's running `cargo auto` processes, from the last scan. */
+	/** The configured build command; the extension swaps it when the config changes. */
+	constructor(public matcher: BuildMatcher) {}
+
+	/** This project's running build processes, from the last scan. */
 	builds: Build[] = [];
 	#clearedAt = 0;
 	#pending: PendingStamp[] = [];
@@ -92,7 +95,7 @@ export class BuildTracker {
 			if (this.#others.has(b.pid)) continue;
 			this.#others.set(b.pid, {
 				id: `pid:${b.pid}`,
-				command: `cargo auto ${b.step}`,
+				command: `${this.matcher.command} ${b.step}`,
 				steps: [b.step],
 				live: b.step,
 				state: 'running',
@@ -142,7 +145,7 @@ export class BuildTracker {
 
 		const runs: Run[] = [];
 		for (const job of this.#ownJobs(snapshot)) {
-			const steps = stepsOf(jobCommand(job));
+			const steps = stepsOf(this.matcher, jobCommand(job));
 			const meta = this.#meta.get(job.id) ?? { stampRoot: null, tree: null, root: null, live: null };
 			this.#meta.set(job.id, meta);
 			const proc = job.status === 'running' ? claim(steps, job.startTime ?? 0, meta.root) : undefined;
@@ -196,7 +199,8 @@ export class BuildTracker {
 	#ownJobs(snapshot: Snapshot): Job[] {
 		if (!snapshot) return [];
 		const live = [...snapshot.running, ...snapshot.recent].filter(
-			j => CARGO_AUTO.test(jobCommand(j)) && (j.status === 'running' || (j.endTime ?? Infinity) > this.#clearedAt),
+			j =>
+				isBuild(this.matcher, jobCommand(j)) && (j.status === 'running' || (j.endTime ?? Infinity) > this.#clearedAt),
 		);
 		const liveIds = new Set(live.map(j => j.id));
 		for (const job of this.#seen.values()) {

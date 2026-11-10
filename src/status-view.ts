@@ -14,7 +14,8 @@ const DEV_MEANING: Record<DevState, string> = {
 	live: 'serving this checkout as it is now',
 	'edits not live': 'serving your last commit; uncommitted edits are not on it',
 	rebuilding: 'its redeploy is building your latest commit; it keeps serving the old build until then',
-	behind: 'serving an older build of this checkout and no redeploy is running; run deploy/dev-deploy',
+	behind: 'serving an older build of this checkout, and no redeploy is running',
+	up: 'running; set deployedShaFile or servedCheckoutFile in /builds config to see what it serves',
 	'not deployed': 'serving other code; this branch is not on it',
 	unknown: 'cannot tell what it is serving',
 };

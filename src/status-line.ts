@@ -39,6 +39,7 @@ const DEV_TONE = {
 	'edits not live': 'warning',
 	rebuilding: 'warning',
 	behind: 'warning',
+	up: 'success',
 	'not deployed': 'muted',
 	unknown: 'muted',
 } as const satisfies Record<DevState, string>;

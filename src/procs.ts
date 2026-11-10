@@ -1,9 +1,10 @@
 import { readdir, readFile, readlink } from 'node:fs/promises';
 import { basename } from 'node:path';
+import { type BuildMatcher, processStep } from './steps';
 import type { Build } from './types';
 
-// Every `cargo auto` runs as a `cargo-auto auto <step>` process. Its nearest `omp` ancestor
-// is the session that started it.
+// Every build step runs as a process whose argv is the configured process words plus the step
+// (`cargo-auto auto test`). Its nearest `omp` ancestor is the session that started it.
 
 interface Stat {
 	ppid: number;
@@ -27,18 +28,13 @@ async function procStat(pid: number): Promise<Stat | null> {
 	return { ppid: Number(fields[1]), start: (await bootTime()) + Number(fields[19]) * 10 };
 }
 
-function autoIndex(argv: string[]): number {
-	const i = argv.findIndex(a => a === 'cargo-auto' || a.endsWith('/cargo-auto'));
-	return i >= 0 && argv[i + 1] === 'auto' ? i : -1;
-}
-
 /** The systemd service a process runs under, from its cgroup path, without `.service`. */
 async function serviceUnit(pid: number): Promise<string | null> {
 	const cgroup = await readFile(`/proc/${pid}/cgroup`, 'utf8').catch(() => '');
 	return /\/([^/]+)\.service$/m.exec(cgroup.trim())?.[1] ?? null;
 }
 
-export async function scanBuilds(): Promise<Build[]> {
+export async function scanBuilds(m: BuildMatcher): Promise<Build[]> {
 	const pids = (await readdir('/proc').catch(() => [] as string[])).filter(n => /^\d+$/.test(n)).map(Number);
 	const argvs = new Map<number, string[]>();
 	await Promise.all(
@@ -52,19 +48,22 @@ export async function scanBuilds(): Promise<Build[]> {
 		if (!stats.has(pid)) stats.set(pid, await procStat(pid));
 		return stats.get(pid) ?? null;
 	};
-	const autoPids = new Set([...argvs].filter(([, argv]) => autoIndex(argv) >= 0).map(([pid]) => pid));
+	const steps = new Map<number, string>();
+	for (const [pid, argv] of argvs) {
+		const step = processStep(m, argv);
+		if (step) steps.set(pid, step);
+	}
 	const builds: Build[] = [];
-	for (const pid of autoPids) {
+	for (const [pid, step] of steps) {
 		const chain: number[] = [];
 		for (let p = (await stat(pid))?.ppid ?? 0; p > 1 && chain.length < 40; p = (await stat(p))?.ppid ?? 0)
 			chain.push(p);
-		// Wrappers that re-exec cargo-auto would double count.
-		if (chain.some(p => autoPids.has(p))) continue;
-		const argv = argvs.get(pid) ?? [];
+		// A wrapper that runs the build process again under itself would double count.
+		if (chain.some(p => steps.has(p))) continue;
 		const owner = chain.find(p => basename(argvs.get(p)?.[0] ?? '') === 'omp') ?? null;
 		builds.push({
 			pid,
-			step: argv.slice(autoIndex(argv) + 2).find(a => !a.startsWith('+')) ?? '?',
+			step,
 			start: (await stat(pid))?.start ?? Date.now(),
 			owner,
 			cwd: await readlink(`/proc/${pid}/cwd`).catch(() => null),

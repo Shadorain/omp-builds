@@ -1,10 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from '@oh-my-pi/pi-coding-agent';
+import { type Config, loadConfig } from './config';
+import { CONFIG_COMPLETIONS, configCommand } from './config-command';
 import { treeStamp } from './git';
 import { scanBuilds } from './procs';
 import { checkoutRoot, projectFor, projectKey } from './projects';
 import { statusLine } from './status-line';
 import { statusView } from './status-view';
-import { buildDir, CARGO_AUTO, mergeSteps, stepsOf, withPipefail } from './steps';
+import { type BuildMatcher, buildDir, buildMatcher, isBuild, mergeSteps, stepsOf, withPipefail } from './steps';
 import { answeredUser, finalReply, openSummary, pickSummary } from './summary';
 import { BuildTracker, settleForeground, startForeground } from './tracker';
 import type { Build, DevPin, Foreground, Project, Run, Step, Summary } from './types';
@@ -24,16 +26,29 @@ const SLOW_IDLE_MS = 30_000;
 const MAX_STEPS = 6;
 const MAX_STAMPED_ROOTS = 6;
 // Edits issued in the same turn as a build run alongside its tool_call hook; stamping a beat
-// later records the tree cargo-auto actually syncs.
+// later records the tree the build actually reads.
 const STAMP_DELAY_MS = 750;
 
-const USAGE = 'Usage: /builds status | /builds summary [last] | /builds clear';
+const USAGE = 'Usage: /builds status | /builds summary [last] | /builds clear | /builds config';
+const NOT_HERE = 'omp-builds is not enabled in this repository. /builds config add turns it on here.';
+
+const matchers = new WeakMap<Config, BuildMatcher>();
+function matcherFor(config: Config): BuildMatcher {
+	let m = matchers.get(config);
+	if (!m) {
+		m = buildMatcher(config.build);
+		matchers.set(config, m);
+	}
+	return m;
+}
 
 // Fixers, mission workers and other SDK sessions keep foreground builds and show nothing.
 const isMain = (ctx: ExtensionContext) => ctx.hasUI === true && ctx.mode === 'tui' && ctx.agent?.kind !== 'sub';
 
 export default function ompBuilds(pi: ExtensionAPI): void {
-	const tracker = new BuildTracker();
+	let loadedFor: Config | null = null;
+	let warnedIssues = '';
+	const tracker = new BuildTracker(buildMatcher({ command: 'cargo' }));
 	let ctxRef: ExtensionContext | null = null;
 	let project: Project | null = null;
 	let pin: DevPin | null = null;
@@ -105,6 +120,8 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	}
 
 	async function refreshSlow(ctx: ExtensionContext): Promise<void> {
+		// A config saved by another session applies here too.
+		if ((await loadConfig()).config !== loadedFor) return restore(ctx);
 		const roots = [project?.root, ...runs.map(r => r.root)].filter((r): r is string => !!r);
 		const unique = [...new Set(roots)].slice(0, MAX_STAMPED_ROOTS);
 		const [stamps, devPin] = await Promise.all([
@@ -125,7 +142,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		if (!scanning && now - lastScan >= (busy ? SCAN_BUSY_MS : SCAN_IDLE_MS)) {
 			scanning = true;
 			lastScan = now;
-			void scanBuilds()
+			void scanBuilds(tracker.matcher)
 				.then(inProject)
 				.then(found => tracker.setBuilds(found))
 				.finally(() => {
@@ -146,6 +163,14 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 
 	async function restore(ctx: ExtensionContext): Promise<void> {
 		ctxRef = ctx;
+		const loaded = await loadConfig();
+		loadedFor = loaded.config;
+		tracker.matcher = matcherFor(loaded.config);
+		const issues = loaded.issues.join('\n');
+		if (issues && issues !== warnedIssues && ctx.hasUI) {
+			ctx.ui.notify(`omp-builds config not loaded; run /builds config edit.\n${issues}`, 'error');
+		}
+		warnedIssues = issues;
 		project = await projectFor(ctx.cwd);
 		const sessionId = ctx.sessionManager.getSessionId();
 		if (sessionId !== summarySession) {
@@ -181,18 +206,19 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		if (event.toolName !== 'bash') return;
 		const input = event.input ?? {};
 		const command = typeof input.command === 'string' ? input.command : '';
-		if (!CARGO_AUTO.test(command) || !(await projectFor(ctx.cwd))) return;
+		const matcher = matcherFor((await loadConfig()).config);
+		if (!isBuild(matcher, command) || !(await projectFor(ctx.cwd))) return;
 		const sub = ctx.agent?.kind === 'sub';
 		if (!sub && !isMain(ctx)) return;
 		const toolCwd = typeof input.cwd === 'string' ? input.cwd : undefined;
-		const stampRoot = await checkoutRoot(buildDir(command, ctx.cwd, toolCwd));
+		const stampRoot = await checkoutRoot(buildDir(matcher, command, ctx.cwd, toolCwd));
 		const tree = Bun.sleep(STAMP_DELAY_MS).then(() => (stampRoot ? treeStamp(stampRoot) : null));
 		const piped = { ...input, command: withPipefail(command) };
 		if (sub || input.async === false) {
 			const run: Foreground = {
 				id: event.toolCallId,
 				command,
-				steps: stepsOf(command),
+				steps: stepsOf(matcher, command),
 				live: null,
 				state: 'running',
 				who: sub ? (ctx.agent?.id ?? ctx.agent?.name ?? 'fixer') : 'main',
@@ -213,7 +239,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		tracker.expect(command, stampRoot, tree);
 		lastScan = 0;
 		const nudge = [
-			"omp-builds: this cargo auto runs in the background; the user's status line shows its progress and result.",
+			`omp-builds: this ${matcher.command} runs in the background; the user's status line shows its progress and result.`,
 			"Do not wait or poll. Continue with the user's request or end your turn; the result arrives on its own.",
 			'If it fails, spawn one task subagent as the fixer in this checkout with the failing command; do not read the full log here.',
 			'Do not wait on the fixer: end your turn so the user can keep talking; its yield arrives on its own. Report its short yield then.',
@@ -250,19 +276,25 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand('builds', {
-		description: 'Builds for this project: status | summary [last] | clear',
+		description: 'Builds for this project: status | summary [last] | clear | config',
 		getArgumentCompletions: prefix => {
 			const items = [
 				{ value: 'status', label: 'status', description: 'Every tracked build, with who, where and how long' },
 				{ value: 'summary ', label: 'summary', description: 'Pick a work summary to show' },
 				{ value: 'summary last', label: 'summary last', description: 'Show the latest work summary' },
 				{ value: 'clear', label: 'clear', description: 'Clear finished builds' },
+				...CONFIG_COMPLETIONS,
 			].filter(item => item.value.startsWith(prefix.trimStart()));
 			return items.length ? items : null;
 		},
 		handler: async (args, ctx) => {
-			const [verb, arg] = args.trim().split(/\s+/);
-			if (!(await projectFor(ctx.cwd))) return ctx.ui.notify('omp-builds only runs in webapp and studio.', 'info');
+			const words = args.trim().split(/\s+/).filter(Boolean);
+			const [verb, arg] = words;
+			if (verb === 'config') {
+				const here = (await projectFor(ctx.cwd))?.name ?? null;
+				return configCommand(ctx, words.slice(1), here, () => restore(ctx));
+			}
+			if (!(await projectFor(ctx.cwd))) return ctx.ui.notify(NOT_HERE, 'info');
 			if (verb === 'clear' && !arg) {
 				tracker.clear();
 				return render();

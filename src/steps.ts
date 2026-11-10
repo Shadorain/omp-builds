@@ -1,19 +1,58 @@
 import { basename, resolve } from 'node:path';
+import type { BuildConfig } from './config';
 import type { Fixer, Run, Step, StepState } from './types';
 
-export const CARGO_AUTO = /(?:^|[\s;&|(])cargo\s+auto\s+(\S+)/;
-const CARGO_AUTO_ALL = /(?:^|[\s;&|(])cargo\s+auto\s+(\S+)/g;
+/** The configured build command, compiled once: finds its steps in shell commands and process argv. */
+export interface BuildMatcher {
+	/** Display form, e.g. `cargo auto`. */
+	command: string;
+	pattern: RegExp;
+	/** argv words that run a step, e.g. `cargo-auto`, `auto`. */
+	process: string[];
+	steps: Set<string> | null;
+}
+
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const words = (s: string) => s.trim().split(/\s+/);
+
+export function buildMatcher(build: BuildConfig): BuildMatcher {
+	const head = words(build.command).map(escapeRegex).join('\\s+');
+	return {
+		command: words(build.command).join(' '),
+		// A toolchain like `+nightly` may sit before the step; flags never count as one.
+		pattern: new RegExp(`(?:^|[\\s;&|(])${head}\\s+(?:\\+\\S+\\s+)?([^\\s;&|()<>-][^\\s;&|()<>]*)`, 'g'),
+		process: words(build.process ?? build.command),
+		steps: build.steps ? new Set(build.steps) : null,
+	};
+}
+
+const allowed = (m: BuildMatcher, step: string) => !m.steps || m.steps.has(step);
 
 /** Step names in a shell command, in order: `cargo auto check && cargo auto test` → check, test. */
-export const stepsOf = (command: string) => [...command.matchAll(CARGO_AUTO_ALL)].map(m => m[1]);
+export const stepsOf = (m: BuildMatcher, command: string) =>
+	[...command.matchAll(m.pattern)].map(x => x[1]).filter(step => allowed(m, step));
+
+export const isBuild = (m: BuildMatcher, command: string) => stepsOf(m, command).length > 0;
+
+/** The step a process runs, when its argv is the build's process (`cargo-auto auto test` → test). */
+export function processStep(m: BuildMatcher, argv: string[]): string | null {
+	const [first, ...rest] = m.process;
+	for (let i = 0; i < argv.length; i++) {
+		if (basename(argv[i]) !== first || !rest.every((w, j) => argv[i + 1 + j] === w)) continue;
+		const step = argv.slice(i + 1 + rest.length).find(a => !a.startsWith('+') && !a.startsWith('-'));
+		return step && allowed(m, step) ? step : null;
+	}
+	return null;
+}
 
 /**
  * Directory a bash call builds in: the tool's `cwd` argument, then a `cd <dir> &&` before the
- * first `cargo auto`, both relative to the session directory.
+ * first build command, both relative to the session directory.
  */
-export function buildDir(command: string, sessionCwd: string, toolCwd?: string): string {
+export function buildDir(m: BuildMatcher, command: string, sessionCwd: string, toolCwd?: string): string {
 	const base = toolCwd ? resolve(sessionCwd, toolCwd) : sessionCwd;
-	const head = command.slice(0, command.search(CARGO_AUTO) + 1);
+	const first = [...command.matchAll(m.pattern)].find(x => allowed(m, x[1]));
+	const head = command.slice(0, (first?.index ?? command.length) + 1);
 	const cds = [...head.matchAll(/(?:^|[;&|(]\s*)cd\s+(["']?)([^\s"';&|]+)\1\s*&&/g)];
 	const dir = cds.at(-1)?.[2];
 	return dir ? resolve(base, dir) : base;
