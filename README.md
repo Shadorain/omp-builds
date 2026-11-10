@@ -38,7 +38,7 @@ Each step (`check`, `test`, `clippy`, …) shows its latest outcome:
 
 - In the interactive main session, `cargo auto …` runs as a background job with no timeout. The agent is told not to wait or poll, and to send one fixer subagent if the build fails without waiting on it. Its turn ends, so you can keep sending ordinary prompts while builds and fixes run; results and the fixer's report arrive on their own.
 - Subagents and `async: false` calls stay in the foreground. Their results still appear on the status line.
-- The `work_summary` tool is active only in these projects. The agent uses it to post what it changed and why; build and test status stays on the status line. The summary opens in a window above the editor when the agent stops, and stays until Esc.
+- After a turn that changed code (here or in a subagent), the agent's final reply opens as the work summary in a window above the editor, rendered as markdown. It stays until Esc. A reply too tall for the window is cut, with the rest in the chat.
 
 ## Windows
 

@@ -1,17 +1,21 @@
-import { type ExtensionAPI, type ExtensionContext, z } from '@oh-my-pi/pi-coding-agent';
+import type { ExtensionAPI, ExtensionContext } from '@oh-my-pi/pi-coding-agent';
 import { treeStamp } from './git';
 import { scanBuilds } from './procs';
 import { checkoutRoot, projectFor, projectKey } from './projects';
 import { statusLine } from './status-line';
 import { statusView } from './status-view';
 import { buildDir, CARGO_AUTO, mergeSteps, stepsOf, withPipefail } from './steps';
-import { openSummary, pickSummary, readSummaries, SUMMARY_ENTRY } from './summary';
+import { finalReply, openSummary, pickSummary, readSummaries, SUMMARY_ENTRY } from './summary';
 import { BuildTracker, settleForeground, startForeground } from './tracker';
 import type { Build, DevPin, Foreground, Project, Run, Step, Summary } from './types';
 import { closeWindow, openWindow } from './window';
 
 const WIDGET = 'omp-builds';
-const TOOL = 'work_summary';
+// Tools that change files: a turn that used one, here or in a subagent, ends with a summary window.
+const EDIT_TOOLS: Record<string, true> = { edit: true, write: true, ast_edit: true };
+const EDITS_KEY = Symbol.for('omp-builds.edits');
+// Subagents run their own instance of this extension in this process; their edits count too.
+const edits = ((globalThis as Record<symbol, unknown>)[EDITS_KEY] ??= new Map()) as Map<string, number>;
 const FRAME_MS = 1_000;
 const SCAN_BUSY_MS = 3_000;
 const SCAN_IDLE_MS = 5_000;
@@ -38,7 +42,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	let runs: Run[] = [];
 	let steps: Step[] = [];
 	let summaries: Summary[] = [];
-	let summaryUnseen = false;
+	let editsSeen = 0;
 	let frame = 0;
 	let lastScan = 0;
 	let lastSlow = 0;
@@ -134,25 +138,17 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		render();
 	}
 
-	// Only touch the tool set on a real change: rewriting it would invalidate the prompt cache.
-	async function setToolActive(on: boolean): Promise<void> {
-		const tools = pi.getActiveTools();
-		if (tools.includes(TOOL) === on) return;
-		await pi.setActiveTools(on ? [...tools, TOOL] : tools.filter(name => name !== TOOL));
-	}
-
 	async function restore(ctx: ExtensionContext): Promise<void> {
 		ctxRef = ctx;
 		project = await projectFor(ctx.cwd);
 		summaries = readSummaries(ctx.sessionManager.getBranch() as unknown[]);
-		summaryUnseen = false;
+		editsSeen = project ? (edits.get(project.key) ?? 0) : 0;
 		tracker.reset();
 		closeWindow();
 		if (lineShown) ctx.ui.setWidget(WIDGET, undefined);
 		lineShown = false;
 		pin = null;
 		trees = new Map();
-		await setToolActive(project !== null && isMain(ctx));
 		if (!live()) return;
 		timer ??= ctx.setInterval(tick, FRAME_MS);
 		lastScan = 0;
@@ -166,6 +162,11 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	pi.on('session_tree', async (_event, ctx) => restore(ctx));
 
 	pi.on('tool_call', async (event, ctx) => {
+		if (EDIT_TOOLS[event.toolName]) {
+			const touched = await projectFor(ctx.cwd);
+			if (touched) edits.set(touched.key, (edits.get(touched.key) ?? 0) + 1);
+			return;
+		}
 		if (event.toolName !== 'bash') return;
 		const input = event.input ?? {};
 		const command = typeof input.command === 'string' ? input.command : '';
@@ -205,7 +206,6 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 			"Do not wait or poll. Continue with the user's request or end your turn; the result arrives on its own.",
 			'If it fails, spawn one task subagent as the fixer in this checkout with the failing command; do not read the full log here.',
 			'Do not wait on the fixer: end your turn so the user can keep talking; its yield arrives on its own. Report its short yield then.',
-			`When the code work is done, call ${TOOL} with what you changed and why (no build or test status); call it again if a fixer changes code.`,
 		].join(' ');
 		return { input: { ...piped, async: true, timeout: 0 }, additionalContext: nudge };
 	});
@@ -215,43 +215,20 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		settleForeground(event.toolCallId, event.isError || (typeof code === 'number' && code !== 0));
 	});
 
-	// Pops up once the agent stops, so it never lands in the middle of a reply.
-	pi.on('agent_end', async () => {
+	// The agent's own final reply, after a turn that changed code. Pops up once the agent stops,
+	// so it never lands in the middle of a reply.
+	pi.on('agent_end', async event => {
 		const ctx = live();
-		const last = summaries.at(-1);
-		if (!ctx || !summaryUnseen || !last) return;
-		summaryUnseen = false;
-		openSummary(ctx, last);
-	});
-
-	const summarySchema = z.object({
-		summary: z.string().min(1).describe('1-4 lines, plain text, no build/test status'),
-	});
-	// Inactive until restore() finds a supported project, so other repos never see it.
-	pi.registerTool({
-		name: TOOL,
-		defaultInactive: true,
-		label: 'Work Summary',
-		description:
-			'Show the user a short summary of the code work you did: what changed and why, 1-4 plain lines. Leave out build and test status; the status line shows that. Call once when the code work is done, and again if a fixer changes code.',
-		parameters: summarySchema,
-		async execute(_id, params, _signal, _onUpdate, ctx) {
-			if (ctx?.agent?.kind === 'sub') {
-				return {
-					content: [{ type: 'text', text: 'Only the main agent posts work summaries. Put this in your yield.' }],
-				};
-			}
-			const { summary: text } = params as z.infer<typeof summarySchema>;
-			const summary = { text: text.trim(), at: new Date().toISOString() };
-			summaries.push(summary);
-			summaryUnseen = true;
-			pi.appendEntry(SUMMARY_ENTRY, summary);
-			return {
-				content: [
-					{ type: 'text', text: 'Shown to the user when this turn ends; they reopen it with /builds summary last.' },
-				],
-			};
-		},
+		if (!ctx || !project) return;
+		const count = edits.get(project.key) ?? 0;
+		if (count === editsSeen) return;
+		const text = finalReply(event.messages);
+		if (!text) return;
+		editsSeen = count;
+		const summary: Summary = { text, at: new Date().toISOString() };
+		summaries.push(summary);
+		pi.appendEntry(SUMMARY_ENTRY, summary);
+		openSummary(ctx, summary);
 	});
 
 	pi.registerCommand('builds', {
@@ -280,7 +257,6 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 			}
 			if (verb !== 'summary' || (arg && arg !== 'last')) return ctx.ui.notify(USAGE, 'info');
 			if (!summaries.length) return ctx.ui.notify('No work summaries in this session yet.', 'info');
-			summaryUnseen = false;
 			if (arg === 'last') openSummary(ctx, summaries.at(-1) as Summary);
 			else await pickSummary(ctx, summaries);
 		},

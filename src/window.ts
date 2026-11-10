@@ -6,7 +6,7 @@ import type { Theme } from './status-line';
 const WIDGET = 'omp-builds-window';
 
 /** Draws the window's rows at a content width; called on every repaint, so it can show live data. */
-export type WindowBody = (theme: Theme, width: number) => string[];
+export type WindowBody = (theme: Theme, width: number) => readonly string[];
 
 // One window at a time: opening another replaces the current one.
 let closeOpen: (() => void) | null = null;

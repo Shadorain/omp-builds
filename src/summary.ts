@@ -1,9 +1,14 @@
 import type { ExtensionContext } from '@oh-my-pi/pi-coding-agent';
-import { wrapTextWithAnsi } from '@oh-my-pi/pi-tui';
+import { Markdown } from '@oh-my-pi/pi-tui';
+import { getMarkdownTheme } from '@oh-my-pi/pi-tui/theme';
 import type { Summary } from './types';
 import { openWindow } from './window';
 
 export const SUMMARY_ENTRY = 'omp-builds.summary';
+
+// Leaves room for the editor and status lines below the window.
+const RESERVED_ROWS = 14;
+const MIN_ROWS = 6;
 
 /** Work summaries saved on this branch, oldest first. */
 export function readSummaries(branch: unknown[]): Summary[] {
@@ -18,14 +23,34 @@ export function readSummaries(branch: unknown[]): Summary[] {
 	return out;
 }
 
+/** Text of the last assistant message in `messages` that has any, or null. */
+export function finalReply(messages: readonly unknown[]): string | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i] as { role?: unknown; content?: unknown };
+		if (m?.role !== 'assistant' || !Array.isArray(m.content)) continue;
+		const text = m.content
+			.filter((c): c is { type: 'text'; text: string } => c?.type === 'text' && typeof c.text === 'string')
+			.map(c => c.text)
+			.join('\n')
+			.trim();
+		if (text) return text;
+	}
+	return null;
+}
+
 const when = (at: string) =>
 	new Date(at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-/** Show `summary` in the temporary window until Esc. */
+/** Show `summary` as markdown in the temporary window until Esc. */
 export function openSummary(ctx: ExtensionContext, summary: Summary): void {
-	openWindow(ctx, `Work summary · ${when(summary.at)}`, (_theme, width) =>
-		summary.text.split('\n').flatMap(line => wrapTextWithAnsi(line.trimEnd(), width)),
-	);
+	const body = new Markdown(summary.text, 0, 0, getMarkdownTheme());
+	openWindow(ctx, `Work summary · ${when(summary.at)}`, (theme, width) => {
+		const lines = body.render(width);
+		const max = Math.max(MIN_ROWS, (process.stdout.rows ?? 40) - RESERVED_ROWS);
+		if (lines.length <= max) return lines;
+		const more = lines.length - max + 1;
+		return [...lines.slice(0, max - 1), theme.fg('muted', `… ${more} more lines in the reply above`)];
+	});
 }
 
 /** Pick one summary from a list, newest first, and open it. */
