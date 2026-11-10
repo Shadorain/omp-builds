@@ -20,19 +20,22 @@ Each step (`check`, `test`, `clippy`, …) shows its latest outcome:
 
 - Each checkout keeps its own steps. A step built outside this session's checkout carries its worktree name, as in `test@bl-demo-api`. Freshness is judged against that worktree's own code.
 - A gray step name means the code changed after that result was built.
-- `other pane` is a build started by another session in the same repo, including its worktrees. Builds in other repos never show.
-- `dev ●` is the dev server. The dot is green while its service runs; a stopped server shows a red dot and `down`. The word says what the server runs compared with this checkout:
+- `other pane` is a build started by another session in the same repo, including its worktrees. Builds in other repos never show. A build run by a systemd unit instead of a session carries the unit's name, e.g. `◐ build 3:10 studio-dev` while the studio dev server redeploys.
+- `dev ●` is the shared dev server (`webapp-dev`, `studio`). The dot is green while its service runs; a stopped server shows a red dot and `down`. The word says what the server runs compared with this checkout:
 
 | State | Meaning |
 |---|---|
 | `live` | Serving this checkout as it is now |
 | `edits not live` | Serving your last commit; uncommitted edits are not on it |
-| `rebuilding` | Rebuilding with your latest commit (studio) |
+| `rebuilding 3:12` | studio only: `studio-dev.service` is redeploying your latest commit; the old build serves until it finishes. Not a build of this session |
+| `behind` | studio only: serving an older build of this checkout and no redeploy is running; run `deploy/dev-deploy` |
 | `not deployed` | Serving other code; this branch is not on it. webapp dev only runs `origin/v2/backend-rewrite` |
 | `unknown` | Cannot tell what it is serving |
 | `down` | The service is not running |
 
-`/builds status` repeats this on its last row, with the dev UI's tailnet link (webapp `http://<host>:3000`, studio `https://<host>:7878`; `<host>` from `tailscale status`).
+- Other servers: any running user service named `<project>*` (e.g. `webapp-refresh-3001`, made with `systemd-run --user --unit …`) whose working directory is inside one of the project's checkouts and that listens on a port. One running from this checkout adds `• :3001 ●` after the dev chip.
+
+`/builds status` lists them on its last rows: the dev server, then every other server with its tailnet link and the checkout it runs from. Links use the host's MagicDNS name: `https://` when `tailscale serve` fronts the port, else `http://` for ports not bound to loopback.
 
 ## What it does to the agent
 
@@ -65,6 +68,7 @@ OMP loads extensions when a session starts. Start a new session after changing t
 ## Adding a project
 
 Add an entry to `PROJECTS` in `src/projects.ts`. Each entry needs:
-- a name;
+- a name, which also prefixes the systemd units searched for extra servers;
 - a regex that matches the `origin` URL;
-- a function that reports the dev server for a checkout.
+- the shared dev server's unit;
+- a function that reports what that server runs compared with a checkout.

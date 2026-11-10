@@ -96,7 +96,8 @@ export class BuildTracker {
 				steps: [b.step],
 				live: b.step,
 				state: 'running',
-				who: 'other pane',
+				// A build under a systemd unit and no session (a dev server redeploy) is named by its unit.
+				who: b.unit ?? 'other pane',
 				kind: 'other',
 				start: b.start,
 				root: b.root,

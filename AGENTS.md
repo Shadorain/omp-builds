@@ -18,7 +18,8 @@ Run format, then test and typecheck, before a commit.
 |---|---|
 |`src/extension.ts`|Event wiring, tick loop, edit tracking for work summaries, `/builds` command|
 |`src/projects.ts`|Supported projects, project detection, checkout roots, dev-server pins|
-|`src/procs.ts`|`/proc` scan for running `cargo-auto` processes and their owning `omp`|
+|`src/servers.ts`|systemd + `ss` + `tailscale serve` lookups: project dev servers, ports, tailnet links|
+|`src/procs.ts`|`/proc` scan for running `cargo-auto` processes, their owning `omp` or systemd unit|
 |`src/tracker.ts`|Job snapshot + shared foreground registry + scan → runs, each with its checkout|
 |`src/steps.ts`|Pure: runs → one latest outcome per step and checkout (tested)|
 |`src/status-line.ts`|Status line rendering|

@@ -38,6 +38,7 @@ const DEV_TONE = {
 	live: 'success',
 	'edits not live': 'warning',
 	rebuilding: 'warning',
+	behind: 'warning',
 	'not deployed': 'muted',
 	unknown: 'muted',
 } as const satisfies Record<DevState, string>;
@@ -45,15 +46,30 @@ const DEV_TONE = {
 /** `dev ● <state>`: the dot is green while the server runs; a down server shows red `down`. */
 export function devChip(theme: Theme, pin: DevPin): string {
 	const light = theme.fg(pin.up ? 'success' : 'error', '●');
-	const here = pin.up ? theme.fg(DEV_TONE[pin.here], pin.here) : theme.fg('error', 'down');
+	const clockText = pin.here === 'rebuilding' && pin.since ? ` ${clock(pin.since)}` : '';
+	const here = pin.up ? theme.fg(DEV_TONE[pin.here], `${pin.here}${clockText}`) : theme.fg('error', 'down');
 	return `${theme.fg('muted', 'dev')} ${light} ${here}`;
 }
 
-/** One line: step chips, then the dev server. */
-export function statusLine(theme: Theme, width: number, steps: Step[], pin: DevPin | null, frame: number): string[] {
+/** Servers started from this checkout, e.g. a preview: `:3001 ●`. */
+export const ownServers = (pin: DevPin, root: string | null) =>
+	pin.extras.filter(s => s.root !== null && s.root === root);
+
+/** One line: step chips, then the dev server and any server running from this checkout. */
+export function statusLine(
+	theme: Theme,
+	width: number,
+	steps: Step[],
+	pin: DevPin | null,
+	root: string | null,
+	frame: number,
+): string[] {
 	const dot = theme.fg('muted', ' • ');
 	const bar = theme.fg('muted', '  │  ');
 	const parts = steps.length ? [steps.map(s => chip(theme, s, frame)).join(dot)] : [];
-	if (pin) parts.push(devChip(theme, pin));
+	if (pin) {
+		const own = ownServers(pin, root).map(s => `${theme.fg('muted', `:${s.port}`)} ${theme.fg('success', '●')}`);
+		parts.push([devChip(theme, pin), ...own].join(dot));
+	}
 	return [truncateToWidth(` ${parts.join(bar)}`, width)];
 }

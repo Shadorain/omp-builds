@@ -2,16 +2,17 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { git, run } from './git';
-import type { DevPin, DevState, Project } from './types';
+import { runningSince, services, tailnetUrl } from './servers';
+import type { DevPin, DevServer, DevState, Project } from './types';
 
-type DevCheck = Omit<DevPin, 'url'>;
+type DevCheck = Pick<DevPin, 'here' | 'since'>;
 
 interface ProjectDef {
 	name: string;
 	/** Matches the `origin` remote URL. */
 	origin: RegExp;
-	/** Dev UI address on this host's tailnet name. */
-	devUrl(host: string): string;
+	/** The shared dev server's systemd unit. Other running `<name>*` units with a port are extra servers. */
+	unit: string;
 	devPin(root: string): Promise<DevCheck>;
 }
 
@@ -20,64 +21,42 @@ const readText = (path: string) =>
 		.then(s => s.trim())
 		.catch(() => null);
 
-const serviceUp = async (unit: string) =>
-	(await run(homedir(), ['systemctl', '--user', 'is-active', unit]))?.trim() === 'active';
-
-// MagicDNS name of this machine, e.g. devbox.tailnet.ts.net. Asked once per process.
-let tailnetHost: Promise<string | null> | undefined;
-function hostName(): Promise<string | null> {
-	tailnetHost ??= run(homedir(), ['tailscale', 'status', '--json']).then(out => {
-		try {
-			const name: unknown = out && JSON.parse(out).Self?.DNSName;
-			return typeof name === 'string' && name ? name.replace(/\.$/, '') : null;
-		} catch {
-			return null;
-		}
-	});
-	return tailnetHost;
-}
-
-const pin = (up: boolean, here: DevState): DevCheck => ({ up, here });
+const check = (here: DevState, since: number | null = null): DevCheck => ({ here, since });
 
 // webapp-dev.service serves origin/v2/backend-rewrite at the sha recorded in `deployed`.
 async function webappPin(root: string): Promise<DevCheck> {
 	const deployed = await readText(join(homedir(), '.local/share/webapp-dev/deployed'));
-	const up = await serviceUp('webapp-dev');
 	const head = await git(root, 'rev-parse', 'HEAD');
-	if (!head || !deployed) return pin(up, 'unknown');
+	if (!head || !deployed) return check('unknown');
 	const inDev = head === deployed || (await run(root, ['git', 'merge-base', '--is-ancestor', head, deployed])) !== null;
-	if (!inDev) return pin(up, 'not deployed');
-	if ((await git(root, 'status', '--porcelain')) !== '') return pin(up, 'edits not live');
-	return pin(up, 'live');
+	if (!inDev) return check('not deployed');
+	if ((await git(root, 'status', '--porcelain')) !== '') return check('edits not live');
+	return check('live');
 }
 
-// Mirrors studio's deploy/dev-deploy: the server rebuilds when the committed Rust stamp changes.
+// Mirrors studio's deploy/dev-deploy: studio-dev.service redeploys on each commit in the
+// served checkout and rebuilds the server when the committed Rust stamp changes.
 async function studioPin(root: string): Promise<DevCheck> {
 	const state = join(homedir(), '.config/studio');
-	const checkout = await readText(join(state, 'dev-checkout'));
-	const built = await readText(join(state, 'dev-built'));
-	const up = await serviceUp('studio');
-	if (checkout !== root) return pin(up, 'not deployed');
+	const [checkout, built, deploying] = await Promise.all([
+		readText(join(state, 'dev-checkout')),
+		readText(join(state, 'dev-built')),
+		runningSince('studio-dev'),
+	]);
+	if (checkout !== root) return check('not deployed');
 	const paths = ['crates', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'];
-	if ((await run(root, ['git', 'diff', '--quiet', 'HEAD', '--', ...paths])) === null) {
-		return pin(up, 'edits not live');
-	}
+	if ((await run(root, ['git', 'diff', '--quiet', 'HEAD', '--', ...paths])) === null) return check('edits not live');
 	const revs = await run(root, ['git', 'rev-parse', ...paths.map(p => `HEAD:${p}`)]);
-	if (revs === null) return pin(up, 'unknown');
+	if (revs === null) return check('unknown');
 	const stamp = new Bun.CryptoHasher('sha1').update(revs).digest('hex').slice(0, 12);
-	return pin(up, stamp === built ? 'live' : 'rebuilding');
+	if (stamp === built) return check('live');
+	return deploying ? check('rebuilding', deploying) : check('behind');
 }
 
 /** Projects this extension switches on for. Every other checkout leaves OMP untouched. */
 const PROJECTS: ProjectDef[] = [
-	{
-		name: 'webapp',
-		origin: /acme\/webapp/i,
-		devUrl: host => `http://${host}:3000`,
-		devPin: webappPin,
-	},
-	// `tailscale serve` fronts studio with HTTPS on the same port.
-	{ name: 'studio', origin: /\/studio/i, devUrl: host => `https://${host}:7878`, devPin: studioPin },
+	{ name: 'webapp', origin: /acme\/webapp/i, unit: 'webapp-dev', devPin: webappPin },
+	{ name: 'studio', origin: /\/studio/i, unit: 'studio', devPin: studioPin },
 ];
 
 // Worktrees of one repo share a common git dir, so they count as one project.
@@ -98,8 +77,20 @@ async function detect(cwd: string): Promise<Project | null> {
 	const key = root ? await projectKey(root) : null;
 	if (!root || !def || !key) return null;
 	const devPin = async (): Promise<DevPin> => {
-		const [check, host] = await Promise.all([def.devPin(root), hostName()]);
-		return { ...check, url: host ? def.devUrl(host) : null };
+		const [state, running] = await Promise.all([def.devPin(root), services(def.name)]);
+		const main = running.find(s => s.unit === def.unit);
+		const extras: DevServer[] = [];
+		for (const s of running) {
+			if (s === main || s.port === null || !s.cwd || (await projectKey(s.cwd)) !== key) continue;
+			extras.push({
+				unit: s.unit,
+				port: s.port,
+				url: await tailnetUrl(s.port, s.loopback),
+				root: await checkoutRoot(s.cwd),
+			});
+		}
+		const url = main?.port ? await tailnetUrl(main.port, main.loopback) : null;
+		return { ...state, up: !!main, url, extras };
 	};
 	return { name: def.name, root, key, devPin };
 }

@@ -19,16 +19,33 @@ export interface Build {
 	cwd: string | null;
 	/** Checkout (worktree) root the build runs in. */
 	root: string | null;
+	/** systemd unit running a build no session started, e.g. the dev server's redeploy. */
+	unit: string | null;
+}
+
+/** A running service of this project listening on a port: the dev server or one started next to it. */
+export interface DevServer {
+	/** systemd unit name without `.service`. */
+	unit: string;
+	port: number;
+	/** Tailnet address, or null when the port is loopback-only and `tailscale serve` does not front it. */
+	url: string | null;
+	/** Checkout it serves from, when its working directory is inside one. */
+	root: string | null;
 }
 
 /** What the dev server runs, relative to this checkout. */
-export type DevState = 'live' | 'edits not live' | 'not deployed' | 'rebuilding' | 'unknown';
+export type DevState = 'live' | 'edits not live' | 'not deployed' | 'rebuilding' | 'behind' | 'unknown';
 
 export interface DevPin {
 	up: boolean;
 	here: DevState;
-	/** Tailnet address of the dev UI, or null when tailscale can't name this host. */
+	/** When the running rebuild started, for `rebuilding`. */
+	since: number | null;
+	/** Tailnet address of the dev UI. */
 	url: string | null;
+	/** Other servers of this project started from one of its checkouts, e.g. a PR preview. */
+	extras: DevServer[];
 }
 
 /** A supported project, resolved for one checkout. */

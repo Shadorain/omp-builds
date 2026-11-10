@@ -77,7 +77,10 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 				want
 					? (tui, theme) => {
 							requestRender = () => tui.requestRender();
-							return { render: (width: number) => statusLine(theme, width, steps, pin, frame), invalidate() {} };
+							return {
+								render: (width: number) => statusLine(theme, width, steps, pin, project?.root ?? null, frame),
+								invalidate() {},
+							};
 						}
 					: undefined,
 				{ placement: 'belowEditor' },

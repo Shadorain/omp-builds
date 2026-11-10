@@ -1,7 +1,7 @@
 import { basename } from 'node:path';
 import { truncateToWidth } from '@oh-my-pi/pi-tui';
 import { clock, devChip, type Theme } from './status-line';
-import type { DevPin, DevState, Run, RunState } from './types';
+import type { DevPin, DevServer, DevState, Run, RunState } from './types';
 
 export interface StatusViewOptions {
 	mainRoot: string | null;
@@ -13,7 +13,8 @@ export interface StatusViewOptions {
 const DEV_MEANING: Record<DevState, string> = {
 	live: 'serving this checkout as it is now',
 	'edits not live': 'serving your last commit; uncommitted edits are not on it',
-	rebuilding: 'rebuilding with your latest commit',
+	rebuilding: 'its redeploy is building your latest commit; it keeps serving the old build until then',
+	behind: 'serving an older build of this checkout and no redeploy is running; run deploy/dev-deploy',
 	'not deployed': 'serving other code; this branch is not on it',
 	unknown: 'cannot tell what it is serving',
 };
@@ -22,6 +23,20 @@ function devRow(theme: Theme, pin: DevPin): string {
 	const meaning = pin.up ? DEV_MEANING[pin.here] : 'server is not running';
 	const url = pin.url ? `  ${theme.fg('accent', pin.url)}` : '';
 	return `${devChip(theme, pin)}${url}  ${theme.fg('muted', meaning)}`;
+}
+
+function serverRow(theme: Theme, server: DevServer, mainRoot: string | null): string {
+	const where = server.root === mainRoot ? 'this checkout' : server.root ? basename(server.root) : '?';
+	const url = server.url ?? `port ${server.port}, not on the tailnet`;
+	return `   ${theme.fg('success', '●')} ${server.unit}  ${theme.fg('accent', url)}  ${theme.fg('muted', `runs from ${where}`)}`;
+}
+
+/** The dev server, then every other server running from one of the project's checkouts, this one first. */
+function devRows(theme: Theme, pin: DevPin, mainRoot: string | null): string[] {
+	const extras = [...pin.extras].sort(
+		(a, b) => Number(b.root === mainRoot) - Number(a.root === mainRoot) || a.port - b.port,
+	);
+	return ['', devRow(theme, pin), ...extras.map(s => serverRow(theme, s, mainRoot))];
 }
 
 const SPINNER = ['◐', '◓', '◑', '◒'];
@@ -54,7 +69,7 @@ const cell = (text: string, width: number) => truncateToWidth(text, width, undef
 /** Every tracked run, running first, then newest first: one row each. The dev server sits at the bottom. */
 export function statusView(theme: Theme, width: number, runs: Run[], options: StatusViewOptions): string[] {
 	const { mainRoot, currentTree, pin, frame } = options;
-	const dev = pin ? ['', devRow(theme, pin)] : [];
+	const dev = pin ? devRows(theme, pin, mainRoot) : [];
 	if (!runs.length) {
 		return [theme.fg('muted', 'No builds tracked in this session yet.'), ...dev].map(l => truncateToWidth(l, width));
 	}

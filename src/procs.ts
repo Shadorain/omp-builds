@@ -32,6 +32,12 @@ function autoIndex(argv: string[]): number {
 	return i >= 0 && argv[i + 1] === 'auto' ? i : -1;
 }
 
+/** The systemd service a process runs under, from its cgroup path, without `.service`. */
+async function serviceUnit(pid: number): Promise<string | null> {
+	const cgroup = await readFile(`/proc/${pid}/cgroup`, 'utf8').catch(() => '');
+	return /\/([^/]+)\.service$/m.exec(cgroup.trim())?.[1] ?? null;
+}
+
 export async function scanBuilds(): Promise<Build[]> {
 	const pids = (await readdir('/proc').catch(() => [] as string[])).filter(n => /^\d+$/.test(n)).map(Number);
 	const argvs = new Map<number, string[]>();
@@ -55,14 +61,16 @@ export async function scanBuilds(): Promise<Build[]> {
 		// Wrappers that re-exec cargo-auto would double count.
 		if (chain.some(p => autoPids.has(p))) continue;
 		const argv = argvs.get(pid) ?? [];
+		const owner = chain.find(p => basename(argvs.get(p)?.[0] ?? '') === 'omp') ?? null;
 		builds.push({
 			pid,
 			step: argv.slice(autoIndex(argv) + 2).find(a => !a.startsWith('+')) ?? '?',
 			start: (await stat(pid))?.start ?? Date.now(),
-			owner: chain.find(p => basename(argvs.get(p)?.[0] ?? '') === 'omp') ?? null,
+			owner,
 			cwd: await readlink(`/proc/${pid}/cwd`).catch(() => null),
 			// Resolved by the caller: a git call per build does not belong in the scan.
 			root: null,
+			unit: owner === null ? await serviceUnit(pid) : null,
 		});
 	}
 	return builds;
