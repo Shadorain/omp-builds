@@ -65,6 +65,11 @@ const TAILSCALE = `#!/usr/bin/env bash
 if [ "$1" = status ]; then echo '{"Self":{"DNSName":"devbox.tailnet.ts.net."}}'; else echo '{}'; fi
 `;
 
+// The web side: `pnpm test:e2e` runs a Playwright-like suite.
+const PNPM = `#!/usr/bin/env bash
+echo "Running 3 tests using 2 workers"; sleep 5; echo "  3 passed (4.9s)"
+`;
+
 async function sh(cwd: string, args: string[], env: Record<string, string> = {}): Promise<string> {
 	const proc = Bun.spawn(args, { cwd, env: { ...process.env, ...env }, stdout: 'pipe', stderr: 'pipe' });
 	const [out, err, code] = await Promise.all([
@@ -102,6 +107,7 @@ async function fixture(root: string, port: number) {
 	await git('worktree', 'add', '-q', '-b', 'api', join(root, 'demo-api'));
 	await script(join(bin, 'cargo'), CARGO);
 	await script(join(bin, 'tailscale'), TAILSCALE);
+	await script(join(bin, 'pnpm'), PNPM);
 	await writeFile(join(root, 'served'), repo);
 	await writeFile(
 		join(agent, 'config.yml'),
@@ -131,6 +137,7 @@ async function fixture(root: string, port: number) {
 					name: 'demo',
 					origin: 'acme/demo',
 					devServer: { unit: 'demo-dev', servedCheckoutFile: join(root, 'served') },
+					builds: [{ label: 'web', command: ['pnpm', 'pnpm run'], steps: ['check', 'test', 'test:e2e'] }],
 				},
 			],
 		}),
@@ -170,10 +177,11 @@ const FAILED = 'As expected, `add_works` failed: `add()` returns `a - b`. Ask an
 const SUMMARY_2 = [
 	'Fixed `add()` in `src/lib.rs`: it returned `a - b`, now `a + b`.',
 	'',
-	'- Rerunning `cargo test` here and `cargo check` in the `demo-api` worktree, both in the background.',
+	'- Rerunning `cargo test` and `pnpm test:e2e` here and `cargo check` in the `demo-api` worktree, all in the background.',
 	'- The preview on `:18732` serves `demo-api`; the dev server serves this checkout.',
 ].join('\n');
-const CHECKED = '`cargo check` is clean in `demo-api`; `cargo test` is still running here.';
+const CHECKED = '`cargo check` is clean in `demo-api`.';
+const E2E = 'The end-to-end suite passed: 3 tests.';
 const PASSED = '**All green.** `cargo test` passes: 1 passed, 0 failed.';
 
 type Msg = { role: string; content?: unknown };
@@ -187,19 +195,27 @@ const textOf = (m: Msg | undefined) =>
 /** The next turn of the conversation, from the latest message that starts a scripted exchange. */
 function reply(messages: Msg[], hasTools: boolean): Reply {
 	if (!hasTools) return { text: 'Greeting and add() fixes' };
-	const keys = ['hello, world', 'Fix add()', 'FAILED', 'test result: ok', 'Finished dev profile'];
+	const keys = ['hello, world', 'Fix add()', 'FAILED', 'test result: ok', 'Finished dev profile', '3 passed'];
 	const last = messages.findLastIndex(m => m.role === 'user' && keys.some(k => textOf(m).includes(k)));
 	const prompt = textOf(messages[last]);
 	const step = messages.slice(last + 1).filter(m => m.role === 'assistant').length;
 	const plan: Reply[] = prompt.includes('hello, world')
 		? [write(LIB_GREETING), bash('cargo check && cargo test'), { text: SUMMARY_1 }]
 		: prompt.includes('Fix add()')
-			? [write(LIB_FIXED), bash('cargo test'), bash('cd ../demo-api && cargo check'), { text: SUMMARY_2 }]
+			? [
+					write(LIB_FIXED),
+					bash('cargo test'),
+					bash('pnpm test:e2e'),
+					bash('cd ../demo-api && cargo check'),
+					{ text: SUMMARY_2 },
+				]
 			: prompt.includes('FAILED')
 				? [{ text: FAILED }]
 				: prompt.includes('test result: ok')
 					? [{ text: PASSED }]
-					: [{ text: CHECKED }];
+					: prompt.includes('3 passed')
+						? [{ text: E2E }]
+						: [{ text: CHECKED }];
 	return plan[Math.min(step, plan.length - 1)];
 }
 
@@ -318,7 +334,7 @@ const text = (row: Cell[]) =>
 type Step = { keys: string; until?: string; snap?: string; timeout?: number };
 
 const PROMPT_1 = 'Make greeting() return "hello, world" and run the tests.';
-const PROMPT_2 = 'Fix add() and rerun the tests; check the demo-api worktree too.';
+const PROMPT_2 = 'Fix add() and rerun the tests and e2e; check the demo-api worktree too.';
 
 const STEPS: Step[] = [
 	{ keys: PROMPT_1 },
