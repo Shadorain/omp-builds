@@ -210,7 +210,10 @@ export class BuildTracker {
 		for (const job of live) {
 			this.#seen.set(job.id, job);
 			if (this.#meta.has(job.id)) continue;
-			const i = this.#pending.findIndex(p => p.command === jobCommand(job) || jobCommand(job).includes(p.command));
+			// Exact first: `cargo test` is a substring of `cd ../wt && cargo test` started alongside it.
+			const command = jobCommand(job);
+			const exact = this.#pending.findIndex(p => p.command === command);
+			const i = exact >= 0 ? exact : this.#pending.findIndex(p => command.includes(p.command));
 			if (i < 0) continue;
 			const [stamp] = this.#pending.splice(i, 1);
 			const meta: JobMeta = { stampRoot: stamp.root, tree: null, root: stamp.root, live: null };
