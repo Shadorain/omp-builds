@@ -36,7 +36,7 @@ An [OMP](https://github.com/can1357/oh-my-pi) extension that keeps your agent's 
 - **One status line per project.** Each step (`check`, `test`, `web test:e2e`, …) shows its latest outcome. Builds in other worktrees carry the worktree name (`check@demo-api`), builds started by other OMP sessions in the same repository show as `other pane`, and a build run by a systemd unit carries the unit name.
 - **Any toolchain.** Track several build commands at once: cargo for the backend, package scripts and Playwright for the frontend. A label keeps two tools' `test` apart.
 - **Dev server awareness.** If the project has a shared dev server running as a systemd user unit, the line says whether it serves this checkout, with its tailnet link in `/builds status`. Other user units named after the project that listen on a port (PR previews, Storybook) are listed too.
-- **Work summaries.** After a turn that edited files (directly or through a subagent), the agent's final reply opens as rendered Markdown above the editor. It stays while you type and is replaced by the next one; Esc closes it.
+- **Work summaries.** After a turn that edited files (directly or through a subagent) and left background builds or fixers running, the agent's final reply opens as rendered Markdown above the editor, so their results do not scroll it away. It stays while you type and is replaced by the next one; Esc closes it. When nothing is left running, the reply stays visible in the chat and no window opens; `/builds summary` still lists it.
 - **Off everywhere else.** Outside configured repositories the extension does nothing: no rewrite, no line, no window.
 
 `/builds status` lists every tracked build, which checkout it built, and whether the code changed since:

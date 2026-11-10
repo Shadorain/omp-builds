@@ -281,11 +281,13 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		openSummary(ctx, summary);
 	}
 
-	// The agent's own final reply, after a turn that changed code. While a summary is still up,
-	// a turn the agent ran on its own (a finished build or fixer reporting in) replaces it too, so
-	// the window never goes stale; a turn the user started without edits leaves it alone.
-	// Pops up once the agent stops, so it never lands in the middle of a reply.
-	pi.on('agent_end', async event => {
+	// The agent's own final reply, after a turn that changed code. It opens as a window only when
+	// background jobs are still running: their results will push the reply off screen. With nothing
+	// pending the reply stays where it is, so it is only saved for /builds summary. While a summary
+	// is still up, a turn the agent ran on its own (a finished build or fixer reporting in) replaces
+	// it, or closes it when nothing follows, so the window never goes stale; a turn the user started
+	// without edits leaves it alone. Pops up once the agent stops, so it never lands mid-reply.
+	pi.on('agent_end', async (event, eventCtx) => {
 		const ctx = live();
 		if (!ctx || !project) return;
 		const count = edits.get(project.key) ?? 0;
@@ -295,7 +297,10 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		editsSeen = count;
 		const summary: Summary = { text, at: new Date().toISOString() };
 		summaries.push(summary);
-		showSummary(ctx, summary);
+		const pending = (eventCtx.getAsyncJobSnapshot?.()?.running.length ?? 0) > 0;
+		if (pending) return showSummary(ctx, summary);
+		shownSummary = null;
+		if (windowOpen('summary')) closeWindow();
 	});
 
 	pi.registerCommand('builds', {
