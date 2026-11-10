@@ -1,10 +1,13 @@
-import { basename } from 'node:path';
-import type { ExtensionContext } from '@oh-my-pi/pi-coding-agent';
+import { readFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
+import { type ExtensionContext, z } from '@oh-my-pi/pi-coding-agent';
 import { truncateToWidth } from '@oh-my-pi/pi-tui';
 import {
+	asList,
+	type BuildConfig,
+	CARGO_BUILD,
 	type Config,
 	configPath,
-	DEFAULT_CONFIG,
 	formatConfig,
 	type LoadedConfig,
 	loadConfig,
@@ -18,15 +21,23 @@ import { services } from './servers';
 import type { Theme } from './status-line';
 import { openWindow } from './window';
 
-export const CONFIG_USAGE = 'Usage: /builds config [add | remove [name] | build <command> | edit]';
+export const CONFIG_USAGE = 'Usage: /builds config [add | remove [name] | build add [command] | build remove | edit]';
 
 export const CONFIG_COMPLETIONS = [
-	{ value: 'config', label: 'config', description: 'Show the configuration: build command and auto-loaded projects' },
+	{ value: 'config', label: 'config', description: 'Show the configuration: builds and auto-loaded projects' },
 	{ value: 'config add', label: 'config add', description: 'Auto-load omp-builds in this repository' },
 	{ value: 'config remove', label: 'config remove', description: 'Stop auto-loading a project' },
-	{ value: 'config build ', label: 'config build', description: 'Set the build command, e.g. cargo auto' },
+	{ value: 'config build add ', label: 'config build add', description: 'Track another build command, e.g. pnpm' },
+	{ value: 'config build remove', label: 'config build remove', description: 'Stop tracking a build command' },
 	{ value: 'config edit', label: 'config edit', description: 'Edit the whole JSON file' },
 ];
+
+function buildRow(theme: Theme, b: BuildConfig): string {
+	const muted = (s: string) => theme.fg('muted', s);
+	const process = b.process ? muted(`  process ${asList(b.process).join(' | ')}`) : '';
+	const label = b.label ? `${theme.fg('accent', b.label)}  ` : '';
+	return `    ${label}${asList(b.command).join(' | ')} ${muted('<step>')}  ${muted(b.steps?.join(', ') ?? 'any step')}${process}`;
+}
 
 function configView(theme: Theme, width: number, loaded: LoadedConfig, here: string | null): string[] {
 	const { config, issues } = loaded;
@@ -35,19 +46,15 @@ function configView(theme: Theme, width: number, loaded: LoadedConfig, here: str
 	if (issues.length) {
 		lines.push('', theme.fg('error', 'Not loaded; fix it with /builds config edit:'), ...issues.map(i => `  ${i}`));
 	}
-	const { build } = config;
-	lines.push(
-		'',
-		`${muted('build    ')}${build.command} ${muted('<step>')}`,
-		`${muted('process  ')}${build.process ?? build.command}`,
-		`${muted('steps    ')}${build.steps?.join(', ') ?? 'any'}`,
-		'',
-	);
+	lines.push('', muted('Every project'), ...config.builds.map(b => buildRow(theme, b)), '');
 	if (!config.projects.length) lines.push(muted('No projects yet. /builds config add enables this repository.'));
 	for (const p of config.projects) {
 		const mark = p.name === here ? theme.fg('success', '●') : muted('○');
 		const dev = p.devServer ? `dev ${p.devServer.unit}` : 'no dev server';
-		lines.push(`${mark} ${p.name}  ${muted(p.origin)}  ${muted(dev)}`);
+		lines.push(
+			`${mark} ${p.name}  ${muted(p.origin)}  ${muted(dev)}`,
+			...(p.builds ?? []).map(b => buildRow(theme, b)),
+		);
 	}
 	lines.push('', muted(CONFIG_USAGE.replace('Usage: ', '')));
 	return lines.map(l => truncateToWidth(l, width));
@@ -73,7 +80,7 @@ async function add(ctx: ExtensionContext, config: Config, onChange: () => Promis
 	const suggested = basename(root)
 		.toLowerCase()
 		.replace(/[^\w.-]/g, '-');
-	const typed = (await ctx.ui.input('Project name', suggested))?.trim();
+	const typed = (await ctx.ui.input(`Project name (Enter for ${suggested})`, suggested))?.trim();
 	if (typed === undefined) return;
 	const name = typed || suggested;
 	if (config.projects.some(p => p.name === name)) return ctx.ui.notify(`"${name}" is taken.`, 'warning');
@@ -127,6 +134,98 @@ async function edit(ctx: ExtensionContext, config: Config, onChange: () => Promi
 	}
 }
 
+// Package runners run scripts as `pnpm test` and `pnpm run test`; both count.
+const PACKAGE_RUNNERS: Record<string, true> = { npm: true, pnpm: true, yarn: true, bun: true };
+// Scripts worth tracking when suggesting steps: the ones that build, check or test.
+const CHECK_SCRIPT = /^(build|check|lint|test|e2e|typecheck|verify)/;
+const PackageSchema = z.object({ scripts: z.record(z.string(), z.string()).optional() });
+
+async function scriptSteps(cwd: string): Promise<string[]> {
+	const root = await checkoutRoot(cwd);
+	const raw = root ? await readFile(join(root, 'package.json'), 'utf8').catch(() => null) : null;
+	if (!raw) return [];
+	let parsed: ReturnType<typeof PackageSchema.safeParse>;
+	try {
+		parsed = PackageSchema.safeParse(JSON.parse(raw));
+	} catch {
+		return [];
+	}
+	return parsed.success ? Object.keys(parsed.data.scripts ?? {}).filter(s => CHECK_SCRIPT.test(s)) : [];
+}
+
+async function addBuild(
+	ctx: ExtensionContext,
+	config: Config,
+	here: string | null,
+	typed: string,
+	onChange: () => Promise<void>,
+): Promise<void> {
+	const command =
+		typed.trim() || (await ctx.ui.input('Build command, e.g. pnpm; the word after it is the step', 'pnpm'))?.trim();
+	if (!command) return;
+	const runner = PACKAGE_RUNNERS[command] === true;
+	const suggested = runner
+		? (await scriptSteps(ctx.cwd)).join(', ')
+		: command === CARGO_BUILD.command
+			? (CARGO_BUILD.steps ?? []).join(', ')
+			: '';
+	const stepsText = await ctx.ui.input(
+		`Steps to track, comma-separated; * for any (Enter for ${suggested || '*'})`,
+		suggested || '*',
+	);
+	if (stepsText === undefined) return;
+	const stepList = stepsText.trim() || suggested || '*';
+	const steps = stepList === '*' ? undefined : stepList.split(/[,\s]+/).filter(Boolean);
+	const label = await ctx.ui.input('Label before each step, e.g. web (empty for none)', '');
+	if (label === undefined) return;
+	const build: BuildConfig = { command: runner ? [command, `${command} run`] : command, steps };
+	if (label.trim()) build.label = label.trim();
+	let scope = 'Every project';
+	if (here) {
+		const pick = await ctx.ui.select('Track it in', [`${here} only`, scope]);
+		if (pick === undefined) return;
+		scope = pick;
+	}
+	const next =
+		scope === 'Every project'
+			? { ...config, builds: [...config.builds, build] }
+			: {
+					...config,
+					projects: config.projects.map(p => (p.name === here ? { ...p, builds: [...(p.builds ?? []), build] } : p)),
+				};
+	const checked = parseConfig(next);
+	if ('issues' in checked) return ctx.ui.notify(`Not saved:\n${checked.issues.join('\n')}`, 'error');
+	const where = scope === 'Every project' ? 'every project' : here;
+	await save(ctx, checked.config, `Tracking ${asList(build.command).join(' | ')} <step> in ${where}.`, onChange);
+}
+
+async function removeBuild(ctx: ExtensionContext, config: Config, onChange: () => Promise<void>): Promise<void> {
+	const describe = (b: BuildConfig) => `${b.label ? `${b.label}: ` : ''}${asList(b.command).join(' | ')}`;
+	const entries = [
+		...config.builds.map((b, i) => ({ title: `every project  ${describe(b)}`, project: null, i })),
+		...config.projects.flatMap(p =>
+			(p.builds ?? []).map((b, i) => ({ title: `${p.name}  ${describe(b)}`, project: p.name, i })),
+		),
+	];
+	if (!entries.length) return ctx.ui.notify('No builds configured.', 'info');
+	const pick = await ctx.ui.select(
+		'Stop tracking',
+		entries.map(e => e.title),
+	);
+	const entry = entries.find(e => e.title === pick);
+	if (!entry) return;
+	const next =
+		entry.project === null
+			? { ...config, builds: config.builds.filter((_, i) => i !== entry.i) }
+			: {
+					...config,
+					projects: config.projects.map(p =>
+						p.name === entry.project ? { ...p, builds: (p.builds ?? []).filter((_, i) => i !== entry.i) } : p,
+					),
+				};
+	await save(ctx, next, `Stopped tracking ${entry.title.replace(/\s+/, ': ')}.`, onChange);
+}
+
 /** `/builds config …`: works in any directory, so a repository can be enabled from inside it. */
 export async function configCommand(
 	ctx: ExtensionContext,
@@ -146,12 +245,7 @@ export async function configCommand(
 		return ctx.ui.notify(`The config has errors; run /builds config edit.\n${loaded.issues.join('\n')}`, 'error');
 	if (verb === 'add' && !rest.length) return add(ctx, config, onChange);
 	if (verb === 'remove' && rest.length <= 1) return remove(ctx, config, rest[0], onChange);
-	if (verb === 'build' && rest.length) {
-		const command = rest.join(' ');
-		// The default step list names cargo subcommands; another tool's steps are its own.
-		const build = command === DEFAULT_CONFIG.build.command ? DEFAULT_CONFIG.build : { command };
-		const limit = build.steps ? '' : ' Every step counts; limit them with build.steps in /builds config edit.';
-		return save(ctx, { ...config, build }, `Build command: ${command} <step>.${limit}`, onChange);
-	}
+	if (verb === 'build' && rest[0] === 'add') return addBuild(ctx, config, here, rest.slice(1).join(' '), onChange);
+	if (verb === 'build' && rest[0] === 'remove' && rest.length === 1) return removeBuild(ctx, config, onChange);
 	ctx.ui.notify(CONFIG_USAGE, 'info');
 }

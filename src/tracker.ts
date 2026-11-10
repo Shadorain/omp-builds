@@ -95,7 +95,7 @@ export class BuildTracker {
 			if (this.#others.has(b.pid)) continue;
 			this.#others.set(b.pid, {
 				id: `pid:${b.pid}`,
-				command: `${this.matcher.command} ${b.step}`,
+				command: b.step,
 				steps: [b.step],
 				live: b.step,
 				state: 'running',

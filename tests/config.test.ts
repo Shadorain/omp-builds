@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_CONFIG, parseConfig, projectFromOrigin } from '../src/config';
+import { buildsFor, DEFAULT_CONFIG, parseConfig, projectFromOrigin } from '../src/config';
 
 const issues = (value: unknown) =>
 	'issues' in parseConfig(value) ? (parseConfig(value) as { issues: string[] }).issues : [];
@@ -10,7 +10,8 @@ describe('parseConfig', () => {
 	});
 
 	test('rejects what would silently misbehave: typos, duplicate names, bad regexes, conflicting deploy sources', () => {
-		expect(issues({ build: { command: 'cargo auto', step: ['test'] } })).toEqual(['build.step: must be removed']);
+		expect(issues({ builds: [{ command: 'cargo auto', step: ['test'] }] })).toEqual(['builds.0.step: must be removed']);
+		expect(issues({ builds: [{ command: [] }] })).toHaveLength(1);
 		expect(
 			issues({
 				projects: [
@@ -24,6 +25,20 @@ describe('parseConfig', () => {
 		expect(issues({ projects: [{ name: 'a', origin: 'x', devServer: both }] })[0]).toStartWith('projects.0.devServer');
 		const stampOnly = { unit: 'dev', builtStamp: { file: 'f', paths: ['src'] } };
 		expect(issues({ projects: [{ name: 'a', origin: 'x', devServer: stampOnly }] })).toHaveLength(1);
+	});
+});
+
+describe('buildsFor', () => {
+	test("a project's builds add to the global ones; other projects do not get them", () => {
+		const parsed = parseConfig({
+			projects: [
+				{ name: 'web', origin: 'x', builds: [{ command: 'pnpm', label: 'web' }] },
+				{ name: 'api', origin: 'y' },
+			],
+		});
+		if (!('config' in parsed)) throw new Error(parsed.issues.join('\n'));
+		expect(buildsFor(parsed.config, 'web').map(b => b.command)).toEqual(['cargo', 'pnpm']);
+		expect(buildsFor(parsed.config, 'api').map(b => b.command)).toEqual(['cargo']);
 	});
 });
 

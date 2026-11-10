@@ -14,14 +14,22 @@ const validRegex = (source: string) => {
 	}
 };
 
+/** One word list or several, e.g. `"pnpm"` or `["pnpm", "pnpm run"]`. */
+const oneOrMore = () => z.union([text(), z.array(text()).min(1)]);
+
 const BuildSchema = z
 	.object({
-		/** Shell command prefix; the word after it is the step, e.g. `cargo auto` + `test`. */
-		command: text(),
-		/** Process argv prefix that runs a step, when it differs from `command` (e.g. `cargo-auto auto`). */
-		process: text().optional(),
+		/** Shell command prefix(es); the word after one is the step, e.g. `cargo auto` + `test`. */
+		command: oneOrMore(),
+		/** Process argv prefix(es) that run a step, when they differ from `command` (e.g. `cargo-auto auto`). */
+		process: oneOrMore().optional(),
 		/** Only these steps count; every step when absent. */
 		steps: z.array(text()).min(1).optional(),
+		/** Shown before each step, so `test` of two tools stay apart: `web test`. */
+		label: z
+			.string()
+			.regex(/^[\w.:-]+$/, "letters, digits, '.', ':', '_' or '-'")
+			.optional(),
 	})
 	.strict();
 
@@ -52,12 +60,15 @@ const ProjectSchema = z
 		/** Case-insensitive regex tested against the `origin` remote URL. */
 		origin: text().refine(validRegex, 'a valid regular expression'),
 		devServer: DevServerSchema.optional(),
+		/** Builds tracked in this project on top of the global ones, e.g. its package scripts. */
+		builds: z.array(BuildSchema).optional(),
 	})
 	.strict();
 
 const ConfigSchema = z
 	.object({
-		build: BuildSchema.optional(),
+		/** Builds tracked in every project. */
+		builds: z.array(BuildSchema).optional(),
 		/** Repositories the extension switches on in. Every other checkout is left alone. */
 		projects: z.array(ProjectSchema).optional(),
 	})
@@ -68,14 +79,24 @@ export type BuildConfig = z.infer<typeof BuildSchema>;
 export type DevServerConfig = z.infer<typeof DevServerSchema>;
 export type ProjectConfig = z.infer<typeof ProjectSchema>;
 export interface Config {
-	build: BuildConfig;
+	builds: BuildConfig[];
 	projects: ProjectConfig[];
 }
 
-export const DEFAULT_CONFIG: Config = {
-	build: { command: 'cargo', steps: ['build', 'check', 'test', 'clippy', 'nextest', 'bench', 'doc'] },
-	projects: [],
+export const CARGO_BUILD: BuildConfig = {
+	command: 'cargo',
+	steps: ['build', 'check', 'test', 'clippy', 'nextest', 'bench', 'doc'],
 };
+
+export const DEFAULT_CONFIG: Config = { builds: [CARGO_BUILD], projects: [] };
+
+/** The global builds, then the project's own. */
+export const buildsFor = (config: Config, projectName: string | null) => [
+	...config.builds,
+	...(config.projects.find(p => p.name === projectName)?.builds ?? []),
+];
+
+export const asList = (value: string | string[]) => (typeof value === 'string' ? [value] : value);
 
 export function agentDir(env: NodeJS.ProcessEnv = process.env): string {
 	return env.PI_CODING_AGENT_DIR?.trim() || env.OMP_AGENT_DIR?.trim() || join(homedir(), '.omp', 'agent');
@@ -98,7 +119,7 @@ export function parseConfig(value: unknown): ConfigResult {
 			`${i.path.map(String).join('.') || 'config'}: ${i.message.replace(/ \(was [[{].*\)$/s, '')}`;
 		return { issues: parsed.error.issues.map(issue) };
 	}
-	return { config: { build: parsed.data.build ?? DEFAULT_CONFIG.build, projects: parsed.data.projects ?? [] } };
+	return { config: { builds: parsed.data.builds ?? DEFAULT_CONFIG.builds, projects: parsed.data.projects ?? [] } };
 }
 
 export interface LoadedConfig {

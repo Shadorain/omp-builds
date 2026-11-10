@@ -1,46 +1,90 @@
 import { basename, resolve } from 'node:path';
-import type { BuildConfig } from './config';
+import { asList, type BuildConfig } from './config';
 import type { Fixer, Run, Step, StepState } from './types';
 
-/** The configured build command, compiled once: finds its steps in shell commands and process argv. */
-export interface BuildMatcher {
+/** One configured build, compiled: finds its steps in shell commands and process argv. */
+interface Rule {
 	/** Display form, e.g. `cargo auto`. */
 	command: string;
+	label: string | null;
 	pattern: RegExp;
-	/** argv words that run a step, e.g. `cargo-auto`, `auto`. */
-	process: string[];
+	/** argv word lists that run a step, e.g. `cargo-auto`, `auto`. */
+	process: string[][];
 	steps: Set<string> | null;
+}
+
+/** Every build tracked in a project. */
+export interface BuildMatcher {
+	rules: Rule[];
 }
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const words = (s: string) => s.trim().split(/\s+/);
 
-export function buildMatcher(build: BuildConfig): BuildMatcher {
-	const head = words(build.command).map(escapeRegex).join('\\s+');
+function rule(build: BuildConfig): Rule {
+	const commands = asList(build.command).map(words);
+	// Longest first, so `pnpm run test` reads as `pnpm run` + `test`, not `pnpm` + `run`.
+	const heads = [...commands]
+		.sort((a, b) => b.length - a.length)
+		.map(c => c.map(escapeRegex).join('\\s+'))
+		.join('|');
 	return {
-		command: words(build.command).join(' '),
+		command: commands[0].join(' '),
+		label: build.label ?? null,
 		// A toolchain like `+nightly` may sit before the step; flags never count as one.
-		pattern: new RegExp(`(?:^|[\\s;&|(])${head}\\s+(?:\\+\\S+\\s+)?([^\\s;&|()<>-][^\\s;&|()<>]*)`, 'g'),
-		process: words(build.process ?? build.command),
+		pattern: new RegExp(`(?:^|[\\s;&|(])(?:${heads})\\s+(?:\\+\\S+\\s+)?([^\\s;&|()<>-][^\\s;&|()<>]*)`, 'g'),
+		process: asList(build.process ?? build.command).map(words),
 		steps: build.steps ? new Set(build.steps) : null,
 	};
 }
 
-const allowed = (m: BuildMatcher, step: string) => !m.steps || m.steps.has(step);
+export const buildMatcher = (builds: BuildConfig[]): BuildMatcher => ({ rules: builds.map(rule) });
 
-/** Step names in a shell command, in order: `cargo auto check && cargo auto test` → check, test. */
-export const stepsOf = (m: BuildMatcher, command: string) =>
-	[...command.matchAll(m.pattern)].map(x => x[1]).filter(step => allowed(m, step));
+const allowed = (r: Rule, step: string) => !r.steps || r.steps.has(step);
+const stepName = (r: Rule, step: string) => (r.label ? `${r.label} ${step}` : step);
 
-export const isBuild = (m: BuildMatcher, command: string) => stepsOf(m, command).length > 0;
+interface Hit {
+	index: number;
+	end: number;
+	step: string;
+	rule: Rule;
+}
 
-/** The step a process runs, when its argv is the build's process (`cargo-auto auto test` → test). */
+/** Build commands in a shell command, in order. Where two builds match at one spot, the longer wins. */
+function hits(m: BuildMatcher, command: string): Hit[] {
+	const all = m.rules
+		.flatMap(r =>
+			[...command.matchAll(r.pattern)]
+				.filter(x => allowed(r, x[1]))
+				.map(x => ({ index: x.index, end: x.index + x[0].length, step: stepName(r, x[1]), rule: r })),
+		)
+		.sort((a, b) => a.index - b.index || b.end - a.end);
+	const kept: Hit[] = [];
+	for (const hit of all) if (hit.index >= (kept.at(-1)?.end ?? 0)) kept.push(hit);
+	return kept;
+}
+
+/** Step names in a shell command, in order: `cargo check && pnpm test` → check, web test. */
+export const stepsOf = (m: BuildMatcher, command: string) => hits(m, command).map(h => h.step);
+
+export const isBuild = (m: BuildMatcher, command: string) => hits(m, command).length > 0;
+
+/** The build command a shell command runs first, e.g. `cargo auto`. */
+export const buildCommand = (m: BuildMatcher, command: string) => hits(m, command)[0]?.rule.command ?? null;
+
+// Script runtimes show the script path in argv: `node …/pnpm.cjs test`.
+const program = (arg: string) => basename(arg).replace(/\.[cm]?js$/, '');
+
+/** The step a process runs, when its argv is a build's process (`cargo-auto auto test` → test). */
 export function processStep(m: BuildMatcher, argv: string[]): string | null {
-	const [first, ...rest] = m.process;
-	for (let i = 0; i < argv.length; i++) {
-		if (basename(argv[i]) !== first || !rest.every((w, j) => argv[i + 1 + j] === w)) continue;
-		const step = argv.slice(i + 1 + rest.length).find(a => !a.startsWith('+') && !a.startsWith('-'));
-		return step && allowed(m, step) ? step : null;
+	for (const r of m.rules) {
+		for (const [first, ...rest] of r.process) {
+			for (let i = 0; i < argv.length; i++) {
+				if (program(argv[i]) !== first || !rest.every((w, j) => argv[i + 1 + j] === w)) continue;
+				const step = argv.slice(i + 1 + rest.length).find(a => !a.startsWith('+') && !a.startsWith('-'));
+				if (step && allowed(r, step)) return stepName(r, step);
+			}
+		}
 	}
 	return null;
 }
@@ -51,7 +95,7 @@ export function processStep(m: BuildMatcher, argv: string[]): string | null {
  */
 export function buildDir(m: BuildMatcher, command: string, sessionCwd: string, toolCwd?: string): string {
 	const base = toolCwd ? resolve(sessionCwd, toolCwd) : sessionCwd;
-	const first = [...command.matchAll(m.pattern)].find(x => allowed(m, x[1]));
+	const first = hits(m, command)[0];
 	const head = command.slice(0, (first?.index ?? command.length) + 1);
 	const cds = [...head.matchAll(/(?:^|[;&|(]\s*)cd\s+(["']?)([^\s"';&|]+)\1\s*&&/g)];
 	const dir = cds.at(-1)?.[2];

@@ -6,7 +6,7 @@ import type { Job } from '../src/types';
 const job = (id: string, command: string): Job => ({ id, command, status: 'running', startTime: 1 });
 
 test('jobs started together keep their own checkout when one command contains the other', () => {
-	const tracker = new BuildTracker(buildMatcher({ command: 'cargo' }));
+	const tracker = new BuildTracker(buildMatcher([{ command: 'cargo' }]));
 	const tree = Promise.resolve(null);
 	tracker.expect('cargo test', '/src/repo', tree);
 	tracker.expect('cd ../repo-api && cargo test', '/src/repo-api', tree);

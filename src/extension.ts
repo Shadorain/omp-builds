@@ -1,12 +1,21 @@
 import type { ExtensionAPI, ExtensionContext } from '@oh-my-pi/pi-coding-agent';
-import { type Config, loadConfig } from './config';
+import { buildsFor, type Config, DEFAULT_CONFIG, loadConfig } from './config';
 import { CONFIG_COMPLETIONS, configCommand } from './config-command';
 import { treeStamp } from './git';
 import { scanBuilds } from './procs';
 import { checkoutRoot, projectFor, projectKey } from './projects';
 import { statusLine } from './status-line';
 import { statusView } from './status-view';
-import { type BuildMatcher, buildDir, buildMatcher, isBuild, mergeSteps, stepsOf, withPipefail } from './steps';
+import {
+	type BuildMatcher,
+	buildCommand,
+	buildDir,
+	buildMatcher,
+	isBuild,
+	mergeSteps,
+	stepsOf,
+	withPipefail,
+} from './steps';
 import { answeredUser, finalReply, openSummary, pickSummary } from './summary';
 import { BuildTracker, settleForeground, startForeground } from './tracker';
 import type { Build, DevPin, Foreground, Project, Run, Step, Summary } from './types';
@@ -32,13 +41,13 @@ const STAMP_DELAY_MS = 750;
 const USAGE = 'Usage: /builds status | /builds summary [last] | /builds clear | /builds config';
 const NOT_HERE = 'omp-builds is not enabled in this repository. /builds config add turns it on here.';
 
-const matchers = new WeakMap<Config, BuildMatcher>();
-function matcherFor(config: Config): BuildMatcher {
-	let m = matchers.get(config);
-	if (!m) {
-		m = buildMatcher(config.build);
-		matchers.set(config, m);
-	}
+// Compiled once per config and project; a changed file is a new config object.
+const matchers = new WeakMap<Config, Map<string | null, BuildMatcher>>();
+function matcherFor(config: Config, projectName: string | null): BuildMatcher {
+	let byProject = matchers.get(config);
+	if (!byProject) matchers.set(config, (byProject = new Map()));
+	let m = byProject.get(projectName);
+	if (!m) byProject.set(projectName, (m = buildMatcher(buildsFor(config, projectName))));
 	return m;
 }
 
@@ -48,7 +57,7 @@ const isMain = (ctx: ExtensionContext) => ctx.hasUI === true && ctx.mode === 'tu
 export default function ompBuilds(pi: ExtensionAPI): void {
 	let loadedFor: Config | null = null;
 	let warnedIssues = '';
-	const tracker = new BuildTracker(buildMatcher({ command: 'cargo' }));
+	const tracker = new BuildTracker(buildMatcher(DEFAULT_CONFIG.builds));
 	let ctxRef: ExtensionContext | null = null;
 	let project: Project | null = null;
 	let pin: DevPin | null = null;
@@ -165,13 +174,13 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		ctxRef = ctx;
 		const loaded = await loadConfig();
 		loadedFor = loaded.config;
-		tracker.matcher = matcherFor(loaded.config);
 		const issues = loaded.issues.join('\n');
 		if (issues && issues !== warnedIssues && ctx.hasUI) {
 			ctx.ui.notify(`omp-builds config not loaded; run /builds config edit.\n${issues}`, 'error');
 		}
 		warnedIssues = issues;
 		project = await projectFor(ctx.cwd);
+		tracker.matcher = matcherFor(loaded.config, project?.name ?? null);
 		const sessionId = ctx.sessionManager.getSessionId();
 		if (sessionId !== summarySession) {
 			summarySession = sessionId;
@@ -206,8 +215,10 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		if (event.toolName !== 'bash') return;
 		const input = event.input ?? {};
 		const command = typeof input.command === 'string' ? input.command : '';
-		const matcher = matcherFor((await loadConfig()).config);
-		if (!isBuild(matcher, command) || !(await projectFor(ctx.cwd))) return;
+		const here = await projectFor(ctx.cwd);
+		if (!here) return;
+		const matcher = matcherFor((await loadConfig()).config, here.name);
+		if (!isBuild(matcher, command)) return;
 		const sub = ctx.agent?.kind === 'sub';
 		if (!sub && !isMain(ctx)) return;
 		const toolCwd = typeof input.cwd === 'string' ? input.cwd : undefined;
@@ -239,7 +250,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		tracker.expect(command, stampRoot, tree);
 		lastScan = 0;
 		const nudge = [
-			`omp-builds: this ${matcher.command} runs in the background; the user's status line shows its progress and result.`,
+			`omp-builds: this ${buildCommand(matcher, command)} runs in the background; the user's status line shows its progress and result.`,
 			"Do not wait or poll. Continue with the user's request or end your turn; the result arrives on its own.",
 			'If it fails, spawn one task subagent as the fixer in this checkout with the failing command; do not read the full log here.',
 			'Do not wait on the fixer: end your turn so the user can keep talking; its yield arrives on its own. Report its short yield then.',

@@ -1,10 +1,16 @@
 import { describe, expect, test } from 'bun:test';
-import { buildDir, buildMatcher, mergeSteps, processStep, stepsOf, withPipefail } from '../src/steps';
+import { buildCommand, buildDir, buildMatcher, mergeSteps, processStep, stepsOf, withPipefail } from '../src/steps';
 import type { Run } from '../src/types';
 
 const MAIN = '/src/repo';
-const AUTO = buildMatcher({ command: 'cargo auto', process: 'cargo-auto auto' });
-const CARGO = buildMatcher({ command: 'cargo', steps: ['build', 'check', 'test'] });
+const AUTO = buildMatcher([{ command: 'cargo auto', process: 'cargo-auto auto' }]);
+const CARGO = buildMatcher([{ command: 'cargo', steps: ['build', 'check', 'test'] }]);
+// A Rust and TypeScript project: cargo, package scripts under a label, and Playwright.
+const MIXED = buildMatcher([
+	{ command: 'cargo', steps: ['build', 'check', 'test'] },
+	{ command: ['pnpm', 'pnpm run'], label: 'web', steps: ['check', 'test', 'test:e2e'] },
+	{ command: ['bunx playwright', 'npx playwright'], process: 'playwright', label: 'e2e', steps: ['test'] },
+]);
 
 const run = (over: Partial<Run>): Run => ({
 	id: 'r',
@@ -37,6 +43,22 @@ describe('stepsOf', () => {
 		expect(stepsOf(CARGO, 'cargo fmt && cargo +nightly test && cargo --version')).toEqual(['test']);
 		expect(stepsOf(CARGO, 'cargo auto test')).toEqual([]);
 	});
+
+	test('several builds read in command order, labelled, and a script runner reads with or without run', () => {
+		expect(stepsOf(MIXED, 'cargo check && pnpm run test:e2e && pnpm check && bunx playwright test')).toEqual([
+			'check',
+			'web test:e2e',
+			'web check',
+			'e2e test',
+		]);
+		expect(stepsOf(MIXED, 'pnpm install && pnpm run dev')).toEqual([]);
+		expect(buildCommand(MIXED, 'cd web && npx playwright test')).toBe('bunx playwright');
+	});
+
+	test('where two builds match at one spot, the longer command wins', () => {
+		const both = buildMatcher([{ command: 'cargo' }, { command: 'cargo auto' }]);
+		expect(stepsOf(both, 'cargo auto test && cargo fmt')).toEqual(['test', 'fmt']);
+	});
 });
 
 describe('processStep', () => {
@@ -45,6 +67,14 @@ describe('processStep', () => {
 		expect(processStep(AUTO, ['bash', '/tmp/bin/cargo-auto', 'auto', 'clippy'])).toBe('clippy');
 		expect(processStep(AUTO, ['cargo-auto', 'sync'])).toBeNull();
 		expect(processStep(CARGO, ['/usr/bin/cargo', 'fmt'])).toBeNull();
+	});
+
+	test("a script runtime's argv names the script, with or without its extension, and steps carry the label", () => {
+		expect(processStep(MIXED, ['node', '/usr/lib/node_modules/pnpm/bin/pnpm.cjs', 'test'])).toBe('web test');
+		expect(processStep(MIXED, ['node', '/repo/node_modules/.bin/playwright', 'test', '--project=chromium'])).toBe(
+			'e2e test',
+		);
+		expect(processStep(MIXED, ['node', '/home/u/.npm-global/bin/pnpm', 'install'])).toBeNull();
 	});
 });
 
