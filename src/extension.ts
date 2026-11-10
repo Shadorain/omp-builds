@@ -145,7 +145,8 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	async function restore(ctx: ExtensionContext): Promise<void> {
 		ctxRef = ctx;
 		project = await projectFor(ctx.cwd);
-		summaries = readSummaries(ctx.sessionManager.getBranch() as unknown[]);
+		// Every branch of the session tree, so summaries survive /tree and /branch moves.
+		summaries = readSummaries(ctx.sessionManager.getEntries() as unknown[]);
 		editsSeen = project ? (edits.get(project.key) ?? 0) : 0;
 		tracker.reset();
 		closeWindow();

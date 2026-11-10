@@ -10,10 +10,10 @@ export const SUMMARY_ENTRY = 'omp-builds.summary';
 const RESERVED_ROWS = 14;
 const MIN_ROWS = 6;
 
-/** Work summaries saved on this branch, oldest first. */
-export function readSummaries(branch: unknown[]): Summary[] {
+/** Work summaries among `entries`, in file order (oldest first). */
+export function readSummaries(entries: unknown[]): Summary[] {
 	const out: Summary[] = [];
-	for (const entry of branch) {
+	for (const entry of entries) {
 		if (!entry || typeof entry !== 'object' || !('customType' in entry) || entry.customType !== SUMMARY_ENTRY) continue;
 		const data = 'data' in entry ? entry.data : null;
 		if (data && typeof data === 'object' && 'text' in data && 'at' in data) {
