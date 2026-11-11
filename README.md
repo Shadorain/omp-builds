@@ -113,7 +113,7 @@ A server unit named `<project>*` that runs from this checkout adds `â€¢ :3001 â—
 
 | Command | Use it to |
 | --- | --- |
-| `/builds status` | List every tracked build and the project's servers |
+| `/builds` or `/builds status` | List every tracked build and the project's servers |
 | `/builds summary` | Pick one of this session's work summaries and show it |
 | `/builds summary last` | Show the latest work summary |
 | `/builds clear` | Clear finished results from the status line |

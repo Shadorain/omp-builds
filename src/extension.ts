@@ -358,7 +358,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand('builds', {
-		description: 'Builds for this project: status | summary [last] | clear | config',
+		description: 'Builds for this project (status by default): status | summary [last] | clear | config',
 		getArgumentCompletions: prefix => completeArgs(BUILDS_ARGS, prefix),
 		handler: async (args, ctx) => {
 			const words = args.trim().split(/\s+/).filter(Boolean);
@@ -372,7 +372,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 				tracker.clear();
 				return render();
 			}
-			if (verb === 'status' && !arg) {
+			if ((verb === 'status' && !arg) || !verb) {
 				const mainRoot = project?.root ?? null;
 				// The summary is sticky: Esc on the status window brings it back.
 				const under = windowOpen('summary') ? shownSummary : null;
