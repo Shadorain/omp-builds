@@ -37,6 +37,7 @@ An [OMP](https://github.com/can1357/oh-my-pi) extension that keeps your agent's 
 - **Any toolchain.** Track several build commands at once: cargo for the backend, package scripts and Playwright for the frontend. A label keeps two tools' `test` apart.
 - **Dev server awareness.** If the project has a shared dev server running as a systemd user unit, the line says whether it serves this checkout, with its tailnet link in `/builds status`. Other user units named after the project that listen on a port (PR previews, Storybook) are listed too.
 - **Work summaries.** After a turn that edited files (directly or through a subagent) and left background builds or fixers running, the agent's final reply opens as rendered Markdown above the editor, so their results do not scroll it away. It stays while you type and is replaced by the next one; Esc closes it. When nothing is left running, the reply stays visible in the chat and no window opens; `/builds summary` still lists it.
+- **Survives restarts.** Each session's results and summaries are saved to `~/.omp/agent/omp-builds/sessions/<session id>.json`, so `omp -c` or `/resume` brings the status line and `/builds summary` back. A build cut off by the restart shows as stopped; results built from code that changed since are marked stale. Files untouched for 30 days are pruned.
 - **Off everywhere else.** Outside configured repositories the extension does nothing: no rewrite, no line, no window.
 
 `/builds status` lists every tracked build, which checkout it built, and whether the code changed since:

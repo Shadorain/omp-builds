@@ -59,11 +59,14 @@ export class BuildTracker {
 	#seen = new Map<string, Job>();
 	// Other sessions' builds, kept after their process exits so /builds status can list them.
 	#others = new Map<number, Run>();
+	// Results saved before this process opened the session; none of them is running.
+	#saved: Run[] = [];
 
-	reset(): void {
+	reset(saved: Run[] = []): void {
 		this.#seen.clear();
 		this.#meta.clear();
 		this.#others.clear();
+		this.#saved = saved;
 	}
 
 	/** Drop finished results; running builds stay. */
@@ -71,6 +74,7 @@ export class BuildTracker {
 		this.#clearedAt = Date.now();
 		for (const [id, job] of this.#seen) if (job.status !== 'running') this.#seen.delete(id);
 		for (const [pid, run] of this.#others) if (run.state !== 'running') this.#others.delete(pid);
+		this.#saved = [];
 	}
 
 	/** A backgrounded command is about to start; its tree stamp lands on the job once it shows up. */
@@ -181,6 +185,9 @@ export class BuildTracker {
 		for (const run of this.#others.values()) {
 			if (run.state === 'running' || (run.end ?? 0) > this.#clearedAt) runs.push(run);
 		}
+		// Job ids restart at bg_1 in a new process; a saved run is the same job only if it also started together.
+		const same = (a: Run, b: Run) => a.id === b.id && a.start === b.start;
+		for (const run of this.#saved) if (!runs.some(r => same(r, run))) runs.push(run);
 		return runs;
 	}
 

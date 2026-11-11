@@ -18,6 +18,7 @@ import {
 	withPipefail,
 } from './steps';
 import { answeredUser, finalReply, openSummary, pickSummary } from './summary';
+import { formatState, loadState, saveState } from './state';
 import { BuildTracker, settleForeground, startForeground } from './tracker';
 import type { Build, DevPin, Foreground, Project, Run, Step, Summary } from './types';
 import { closeWindow, openWindow, windowOpen } from './window';
@@ -77,9 +78,12 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	let trees = new Map<string, string | null>();
 	let runs: Run[] = [];
 	let steps: Step[] = [];
-	// Summaries shown since this process opened the session; a resumed or switched-to session starts empty.
+	// This session's summaries, saved with its builds, so a resumed session still has them.
 	let summaries: Summary[] = [];
-	let summarySession: string | null = null;
+	// Session whose saved state is loaded; nothing is saved while another one is loading.
+	let stateSession: string | null = null;
+	let savedText = '';
+	let saving: Promise<void> | null = null;
 	let editsSeen = 0;
 	let shownSummary: Summary | null = null;
 	let frame = 0;
@@ -125,6 +129,23 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 			);
 		}
 		requestRender?.();
+		persist(ctx);
+	}
+
+	/** Saves this session's state when it changed; a change during a write is saved on a later frame. */
+	function persist(ctx: ExtensionContext): void {
+		const sessionId = ctx.sessionManager.getSessionId();
+		if (sessionId !== stateSession) return;
+		const text = formatState({ runs, summaries });
+		if (text === savedText || saving) return;
+		savedText = text;
+		saving = saveState(sessionId, text)
+			.catch(() => {
+				savedText = '';
+			})
+			.finally(() => {
+				saving = null;
+			});
 	}
 
 	/** Builds in this project's checkouts (any worktree), each with its checkout root. */
@@ -194,13 +215,20 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		project = await projectFor(ctx.cwd);
 		tracker.matcher = matcherFor(loaded.config, project?.name ?? null);
 		const sessionId = ctx.sessionManager.getSessionId();
-		if (sessionId !== summarySession) {
-			summarySession = sessionId;
-			summaries = [];
+		if (sessionId !== stateSession) {
+			stateSession = null;
+			const saved = live() ? await loadState(sessionId) : null;
+			if (ctx !== ctxRef) return;
+			stateSession = sessionId;
+			summaries = saved?.summaries ?? [];
 			shownSummary = null;
+			tracker.reset(saved?.runs ?? []);
+			savedText = saved ? formatState(saved) : formatState({ runs: [], summaries: [] });
+		} else {
+			// Same session, rebuilt (a branch or a changed config): finished results stay.
+			tracker.reset(runs.filter(r => r.kind !== 'other' && r.state !== 'running'));
 		}
 		editsSeen = project ? (edits.get(project.key) ?? 0) : 0;
-		tracker.reset();
 		closeWindow();
 		if (lineShown) ctx.ui.setWidget(WIDGET, undefined);
 		lineShown = false;
