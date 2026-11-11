@@ -6,10 +6,16 @@ export type Theme = ExtensionContext['ui']['theme'];
 
 const SPINNER = ['◐', '◓', '◑', '◒'];
 
-export function clock(start: number, end?: number): string {
-	const s = Math.max(0, Math.round(((end ?? Date.now()) - start) / 1000));
+export const span = (ms: number) => {
+	const s = Math.max(0, Math.round(ms / 1000));
 	return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
+};
+
+export const clock = (start: number, end?: number) => span((end ?? Date.now()) - start);
+
+/** `1:10/~3:00`: time so far, over how long the step usually takes. */
+export const progress = (start: number, usual: number | null) =>
+	usual === null ? clock(start) : `${clock(start)}/~${span(usual)}`;
 
 function icon(theme: Theme, state: StepState, frame: number): string {
 	switch (state) {
@@ -31,7 +37,8 @@ function chip(theme: Theme, step: Step, frame: number): string {
 	const label = step.where ? `${step.name}@${step.where}` : step.name;
 	const name = step.stale ? theme.fg('muted', label) : label;
 	const who = step.kind === 'main' ? '' : ` ${step.who}`;
-	return `${icon(theme, step.state, frame)} ${name}${busy ? theme.fg('muted', ` ${clock(step.start)}${who}`) : ''}`;
+	const time = step.state === 'running' ? progress(step.start, step.usual) : clock(step.start);
+	return `${icon(theme, step.state, frame)} ${name}${busy ? theme.fg('muted', ` ${time}${who}`) : ''}`;
 }
 
 const DEV_TONE = {

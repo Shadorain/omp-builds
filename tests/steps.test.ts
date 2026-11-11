@@ -28,11 +28,14 @@ const run = (over: Partial<Run>): Run => ({
 });
 
 const merge = (runs: Run[], over: Partial<Parameters<typeof mergeSteps>[1]> = {}) =>
-	mergeSteps(runs, { mainRoot: MAIN, currentTree: () => 'aaa', fixers: [], maxSteps: 6, ...over }).map(s => [
-		s.where ? `${s.name}@${s.where}` : s.name,
-		s.state,
-		s.stale,
-	]);
+	mergeSteps(runs, {
+		mainRoot: MAIN,
+		currentTree: () => 'aaa',
+		fixers: [],
+		maxSteps: 6,
+		usual: () => null,
+		...over,
+	}).map(s => [s.where ? `${s.name}@${s.where}` : s.name, s.state, s.stale]);
 
 describe('stepsOf', () => {
 	test('reads every step of a chained command', () => {

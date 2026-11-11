@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 import { truncateToWidth } from '@oh-my-pi/pi-tui';
-import { clock, devChip, type Theme } from './status-line';
+import { clock, devChip, span, type Theme } from './status-line';
 import type { DevPin, DevServer, DevState, Run, RunState } from './types';
 
 export interface StatusViewOptions {
@@ -8,6 +8,8 @@ export interface StatusViewOptions {
 	currentTree(root: string): string | null;
 	pin: DevPin | null;
 	frame: number;
+	/** How long a step usually takes when it passes; null with no history. */
+	usual(step: string): number | null;
 }
 
 const DEV_MEANING: Record<DevState, string> = {
@@ -67,9 +69,17 @@ function badge(theme: Theme, state: RunState, frame: number): string {
 
 const cell = (text: string, width: number) => truncateToWidth(text, width, undefined, true);
 
+/** A running run's time so far over its steps' usual total, once every step has passed before. */
+function took(run: Run, usual: (step: string) => number | null): string {
+	if (run.state !== 'running') return clock(run.start, run.end);
+	const times = run.steps.map(usual);
+	if (times.some(t => t === null)) return clock(run.start);
+	return `${clock(run.start)}/~${span(times.reduce<number>((a, t) => a + (t ?? 0), 0))}`;
+}
+
 /** Every tracked run, running first, then newest first: one row each. The dev server sits at the bottom. */
 export function statusView(theme: Theme, width: number, runs: Run[], options: StatusViewOptions): string[] {
-	const { mainRoot, currentTree, pin, frame } = options;
+	const { mainRoot, currentTree, pin, frame, usual } = options;
 	const dev = pin ? devRows(theme, pin, mainRoot) : [];
 	if (!runs.length) {
 		return [theme.fg('muted', 'No builds tracked in this session yet.'), ...dev].map(l => truncateToWidth(l, width));
@@ -83,7 +93,7 @@ export function statusView(theme: Theme, width: number, runs: Run[], options: St
 	);
 	const columns = theme.fg(
 		'muted',
-		`${cell('state', 9)}  ${cell('steps', 22)}  ${cell('who', 10)}  ${cell('checkout', 16)}  ${cell('took', 5)}  ${cell('started', 8)}  code`,
+		`${cell('state', 9)}  ${cell('steps', 22)}  ${cell('who', 10)}  ${cell('checkout', 16)}  ${cell('took', 10)}  ${cell('started', 8)}  code`,
 	);
 	const rank = (r: Run) => (r.state === 'running' ? 0 : 1);
 	const sorted = [...runs].sort((a, b) => rank(a) - rank(b) || b.start - a.start).slice(0, MAX_ROWS);
@@ -107,7 +117,7 @@ export function statusView(theme: Theme, width: number, runs: Run[], options: St
 			cell(steps, 22),
 			theme.fg(run.kind === 'sub' ? 'accent' : 'text', cell(run.who, 10)),
 			theme.fg(root === mainRoot ? 'muted' : 'text', cell(root ? basename(root) : '?', 16)),
-			cell(clock(run.start, run.end), 5),
+			cell(took(run, usual), 10),
 			theme.fg('muted', cell(ago(run.start), 8)),
 			code,
 		].join('  ');

@@ -77,6 +77,13 @@ export interface Run {
 	root: string | null;
 	/** Working-tree stamp the run built. */
 	tree: string | null;
+	/** When each step's process was first and last seen, for steps of a chain that got a process. */
+	timings?: Record<string, StepTiming>;
+}
+
+export interface StepTiming {
+	start: number;
+	end: number;
 }
 
 /** The latest outcome of one step in one checkout, as the status line shows it. */
@@ -90,6 +97,8 @@ export interface Step {
 	kind: RunKind;
 	start: number;
 	end?: number;
+	/** How long this step usually takes when it passes, from earlier runs; null with no history. */
+	usual: number | null;
 	/** The code changed after this result was built. */
 	stale: boolean;
 }

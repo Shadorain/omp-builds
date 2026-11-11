@@ -127,7 +127,9 @@ export function expand(run: Run): Outcome[] {
 		if (run.state === 'cancelled') state = 'cancelled';
 		else if (run.state === 'completed' || i < at) state = 'passed';
 		else if (i === at) state = run.state === 'running' ? 'running' : 'failed';
-		if (state) out.push({ name, state, who: run.who, kind: run.kind, start: run.start, end: run.end });
+		// A chain's running step counts from when its own process started.
+		const start = state === 'running' ? (run.timings?.[name]?.start ?? run.start) : run.start;
+		if (state) out.push({ name, state, who: run.who, kind: run.kind, start, end: run.end });
 	});
 	return out;
 }
@@ -140,10 +142,12 @@ export interface MergeOptions {
 	/** Subagents working right now; one that started after a failure in its checkout is fixing it. */
 	fixers: Fixer[];
 	maxSteps: number;
+	/** How long a step usually takes when it passes; null with no history. */
+	usual(step: string): number | null;
 }
 
 /** The latest outcome per step and checkout, ordered by when each first appeared. */
-export function mergeSteps(runs: Run[], { mainRoot, currentTree, fixers, maxSteps }: MergeOptions): Step[] {
+export function mergeSteps(runs: Run[], { mainRoot, currentTree, fixers, maxSteps, usual }: MergeOptions): Step[] {
 	const latest = new Map<string, Step>();
 	// Keys whose step failed in that checkout before the run now shown: a subagent rebuilding it is fixing it.
 	const failedBefore = new Set<string>();
@@ -158,7 +162,7 @@ export function mergeSteps(runs: Run[], { mainRoot, currentTree, fixers, maxStep
 			if (!order.includes(key)) order.push(key);
 			const prev = latest.get(key);
 			if (prev) failedBefore[prev.state === 'failed' ? 'add' : 'delete'](key);
-			latest.set(key, { ...outcome, where, root, stale });
+			latest.set(key, { ...outcome, where, root, stale, usual: usual(outcome.name) });
 		}
 	}
 	return order.slice(-maxSteps).map(key => {

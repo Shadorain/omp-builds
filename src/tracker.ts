@@ -1,6 +1,6 @@
 import { treeStamp } from './git';
 import { type BuildMatcher, isBuild, stepsOf } from './steps';
-import type { Build, Fixer, Foreground, Job, Run, RunState } from './types';
+import type { Build, Fixer, Foreground, Job, Run, RunState, StepTiming } from './types';
 
 const MAX_OWN_JOBS = 8;
 const MAX_FOREGROUND = 12;
@@ -41,6 +41,7 @@ interface JobMeta {
 	tree: string | null;
 	root: string | null;
 	live: string | null;
+	timings: Record<string, StepTiming>;
 }
 
 type Snapshot = { running: Job[]; recent: Job[] } | null | undefined;
@@ -52,6 +53,7 @@ export class BuildTracker {
 
 	/** This project's running build processes, from the last scan. */
 	builds: Build[] = [];
+	#scannedAt = 0;
 	#clearedAt = 0;
 	#pending: PendingStamp[] = [];
 	#meta = new Map<string, JobMeta>();
@@ -85,6 +87,7 @@ export class BuildTracker {
 
 	setBuilds(builds: Build[]): void {
 		this.builds = builds;
+		this.#scannedAt = Date.now();
 		const mine = new Set(builds.filter(b => b.owner === process.pid).map(b => b.step));
 		// A subagent aborted mid-build never reports a result; once its process is gone, stop the spinner.
 		for (const run of foreground.values()) {
@@ -139,6 +142,10 @@ export class BuildTracker {
 			if (proc) claimed.add(proc.pid);
 			return proc;
 		};
+		// A process stays in the scan until the next one, so its end is when it was last seen.
+		const time = (timings: Record<string, StepTiming>, proc: Build) => {
+			timings[proc.step] = { start: proc.start, end: Math.max(proc.start, this.#scannedAt) };
+		};
 		const restamp = (meta: { stampRoot: string | null; tree: string | null }, root: string | null) => {
 			if (!root || root === meta.stampRoot) return;
 			meta.stampRoot = root;
@@ -150,13 +157,14 @@ export class BuildTracker {
 		const runs: Run[] = [];
 		for (const job of this.#ownJobs(snapshot)) {
 			const steps = stepsOf(this.matcher, jobCommand(job));
-			const meta = this.#meta.get(job.id) ?? { stampRoot: null, tree: null, root: null, live: null };
+			const meta = this.#meta.get(job.id) ?? { stampRoot: null, tree: null, root: null, live: null, timings: {} };
 			this.#meta.set(job.id, meta);
 			const proc = job.status === 'running' ? claim(steps, job.startTime ?? 0, meta.root) : undefined;
 			if (proc) {
 				meta.live = proc.step;
 				meta.root = proc.root ?? meta.root;
 				restamp(meta, proc.root);
+				time(meta.timings, proc);
 			}
 			runs.push({
 				id: job.id,
@@ -170,6 +178,7 @@ export class BuildTracker {
 				end: job.status === 'running' ? undefined : job.endTime,
 				root: meta.root,
 				tree: meta.tree,
+				timings: meta.timings,
 			});
 		}
 		for (const run of foreground.values()) {
@@ -179,6 +188,7 @@ export class BuildTracker {
 				run.live = proc.step;
 				run.root = proc.root ?? run.root;
 				restamp(run, proc.root);
+				time((run.timings ??= {}), proc);
 			}
 			runs.push(run);
 		}
@@ -223,7 +233,7 @@ export class BuildTracker {
 			const i = exact >= 0 ? exact : this.#pending.findIndex(p => command.includes(p.command));
 			if (i < 0) continue;
 			const [stamp] = this.#pending.splice(i, 1);
-			const meta: JobMeta = { stampRoot: stamp.root, tree: null, root: stamp.root, live: null };
+			const meta: JobMeta = { stampRoot: stamp.root, tree: null, root: stamp.root, live: null, timings: {} };
 			this.#meta.set(job.id, meta);
 			void stamp.tree.then(tree => {
 				if (meta.stampRoot === stamp.root) meta.tree = tree;

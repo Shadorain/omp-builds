@@ -18,6 +18,7 @@ import {
 	withPipefail,
 } from './steps';
 import { answeredUser, finalReply, openSummary, pickSummary } from './summary';
+import { historyPath, StepHistory } from './history';
 import { formatState, loadState, saveState } from './state';
 import { BuildTracker, settleForeground, startForeground } from './tracker';
 import type { Build, DevPin, Foreground, Project, Run, Step, Summary } from './types';
@@ -84,6 +85,10 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	let stateSession: string | null = null;
 	let savedText = '';
 	let saving: Promise<void> | null = null;
+	// Pass times of this project's steps, for how long a running one usually takes.
+	let history = new StepHistory(null);
+	let savingHistory: Promise<void> | null = null;
+	const usual = (step: string) => history.usual(step);
 	let editsSeen = 0;
 	let shownSummary: Summary | null = null;
 	let frame = 0;
@@ -104,11 +109,13 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		if (!ctx) return;
 		const snapshot = ctx.getAsyncJobSnapshot?.();
 		runs = tracker.runs(snapshot);
+		for (const run of runs) history.record(run);
 		steps = mergeSteps(runs, {
 			mainRoot: project?.root ?? null,
 			currentTree,
 			fixers: tracker.fixers(snapshot),
 			maxSteps: MAX_STEPS,
+			usual,
 		});
 		const want = steps.length > 0;
 		if (want !== lineShown) {
@@ -132,8 +139,16 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		persist(ctx);
 	}
 
-	/** Saves this session's state when it changed; a change during a write is saved on a later frame. */
+	/** Saves this session's state and new step times when they changed; a change during a write is saved on a later frame. */
 	function persist(ctx: ExtensionContext): void {
+		if (history.dirty && !savingHistory) {
+			savingHistory = history
+				.save()
+				.catch(() => {})
+				.finally(() => {
+					savingHistory = null;
+				});
+		}
 		const sessionId = ctx.sessionManager.getSessionId();
 		if (sessionId !== stateSession) return;
 		const text = formatState({ runs, summaries });
@@ -173,6 +188,8 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		if (ctx !== ctxRef) return;
 		trees = new Map(stamps);
 		pin = devPin;
+		// Other sessions' passes of the same steps count too.
+		await history.load();
 	}
 
 	function tick(): void {
@@ -214,6 +231,13 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		warnedIssues = issues;
 		project = await projectFor(ctx.cwd);
 		tracker.matcher = matcherFor(loaded.config, project?.name ?? null);
+		const path = project ? historyPath(project.name) : null;
+		if (path !== history.path) {
+			void history.save().catch(() => {});
+			history = new StepHistory(path);
+			await history.load();
+			if (ctx !== ctxRef) return;
+		}
 		const sessionId = ctx.sessionManager.getSessionId();
 		if (sessionId !== stateSession) {
 			stateSession = null;
@@ -354,7 +378,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 					ctx,
 					'status',
 					`Builds · ${project?.name ?? ''}`,
-					(theme, width) => statusView(theme, width, runs, { mainRoot, currentTree, pin, frame }),
+					(theme, width) => statusView(theme, width, runs, { mainRoot, currentTree, pin, frame, usual }),
 					under ? () => showSummary(ctx, under) : undefined,
 				);
 			}
