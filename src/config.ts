@@ -71,6 +71,8 @@ const ConfigSchema = z
 		builds: z.array(BuildSchema).optional(),
 		/** Repositories the extension switches on in. Every other checkout is left alone. */
 		projects: z.array(ProjectSchema).optional(),
+		/** Time passing steps and show how long a running one usually takes. On by default. */
+		estimates: z.boolean().optional(),
 	})
 	.strict()
 	.refine(c => new Set(c.projects?.map(p => p.name)).size === (c.projects?.length ?? 0), 'unique project names');
@@ -81,6 +83,7 @@ export type ProjectConfig = z.infer<typeof ProjectSchema>;
 export interface Config {
 	builds: BuildConfig[];
 	projects: ProjectConfig[];
+	estimates: boolean;
 }
 
 export const CARGO_BUILD: BuildConfig = {
@@ -88,7 +91,7 @@ export const CARGO_BUILD: BuildConfig = {
 	steps: ['build', 'check', 'test', 'clippy', 'nextest', 'bench', 'doc'],
 };
 
-export const DEFAULT_CONFIG: Config = { builds: [CARGO_BUILD], projects: [] };
+export const DEFAULT_CONFIG: Config = { builds: [CARGO_BUILD], projects: [], estimates: true };
 
 /** The global builds, then the project's own. */
 export const buildsFor = (config: Config, projectName: string | null) => [
@@ -119,7 +122,14 @@ export function parseConfig(value: unknown): ConfigResult {
 			`${i.path.map(String).join('.') || 'config'}: ${i.message.replace(/ \(was [[{].*\)$/s, '')}`;
 		return { issues: parsed.error.issues.map(issue) };
 	}
-	return { config: { builds: parsed.data.builds ?? DEFAULT_CONFIG.builds, projects: parsed.data.projects ?? [] } };
+	const { builds, projects, estimates } = parsed.data;
+	return {
+		config: {
+			builds: builds ?? DEFAULT_CONFIG.builds,
+			projects: projects ?? [],
+			estimates: estimates ?? DEFAULT_CONFIG.estimates,
+		},
+	};
 }
 
 export interface LoadedConfig {

@@ -22,7 +22,8 @@ import type { Theme } from './status-line';
 import { openWindow } from './window';
 import type { ArgNode } from './completions';
 
-export const CONFIG_USAGE = 'Usage: /builds config [add | remove [name] | build add [command] | build remove | edit]';
+export const CONFIG_USAGE =
+	'Usage: /builds config [add | remove [name] | build add [command] | build remove | estimates [on | off] | edit]';
 
 export const CONFIG_ARGS: ArgNode = {
 	word: 'config',
@@ -36,6 +37,14 @@ export const CONFIG_ARGS: ArgNode = {
 			next: [
 				{ word: 'add', description: 'Track another build command, e.g. pnpm' },
 				{ word: 'remove', description: 'Stop tracking a build command' },
+			],
+		},
+		{
+			word: 'estimates',
+			description: 'Toggle how long running steps usually take',
+			next: [
+				{ word: 'on', description: 'Time passing steps and show the usual time' },
+				{ word: 'off', description: 'Stop timing steps and hide the usual time' },
 			],
 		},
 		{ word: 'edit', description: 'Edit the whole JSON file' },
@@ -56,6 +65,8 @@ function configView(theme: Theme, width: number, loaded: LoadedConfig, here: str
 	if (issues.length) {
 		lines.push('', theme.fg('error', 'Not loaded; fix it with /builds config edit:'), ...issues.map(i => `  ${i}`));
 	}
+	const estimates = config.estimates ? theme.fg('success', 'on') : muted('off');
+	lines.push('', `${muted('Usual step times')}  ${estimates}`);
 	lines.push('', muted('Every project'), ...config.builds.map(b => buildRow(theme, b)), '');
 	if (!config.projects.length) lines.push(muted('No projects yet. /builds config add enables this repository.'));
 	for (const p of config.projects) {
@@ -257,5 +268,10 @@ export async function configCommand(
 	if (verb === 'remove' && rest.length <= 1) return remove(ctx, config, rest[0], onChange);
 	if (verb === 'build' && rest[0] === 'add') return addBuild(ctx, config, here, rest.slice(1).join(' '), onChange);
 	if (verb === 'build' && rest[0] === 'remove' && rest.length === 1) return removeBuild(ctx, config, onChange);
+	if (verb === 'estimates' && rest.length <= 1 && (!rest[0] || rest[0] === 'on' || rest[0] === 'off')) {
+		const estimates = rest[0] ? rest[0] === 'on' : !config.estimates;
+		const done = estimates ? 'Running steps now show how long they usually take.' : 'Usual step times are off.';
+		return save(ctx, { ...config, estimates }, done, onChange);
+	}
 	ctx.ui.notify(CONFIG_USAGE, 'info');
 }

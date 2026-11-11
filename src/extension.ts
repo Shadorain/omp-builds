@@ -88,7 +88,8 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 	// Pass times of this project's steps, for how long a running one usually takes.
 	let history = new StepHistory(null);
 	let savingHistory: Promise<void> | null = null;
-	const usual = (step: string) => history.usual(step);
+	let estimates = DEFAULT_CONFIG.estimates;
+	const usual = (step: string) => (estimates ? history.usual(step) : null);
 	let editsSeen = 0;
 	let shownSummary: Summary | null = null;
 	let frame = 0;
@@ -109,7 +110,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		if (!ctx) return;
 		const snapshot = ctx.getAsyncJobSnapshot?.();
 		runs = tracker.runs(snapshot);
-		for (const run of runs) history.record(run);
+		if (estimates) for (const run of runs) history.record(run);
 		steps = mergeSteps(runs, {
 			mainRoot: project?.root ?? null,
 			currentTree,
@@ -231,6 +232,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 		warnedIssues = issues;
 		project = await projectFor(ctx.cwd);
 		tracker.matcher = matcherFor(loaded.config, project?.name ?? null);
+		estimates = loaded.config.estimates;
 		const path = project ? historyPath(project.name) : null;
 		if (path !== history.path) {
 			void history.save().catch(() => {});

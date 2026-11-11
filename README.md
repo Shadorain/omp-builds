@@ -122,6 +122,7 @@ A server unit named `<project>*` that runs from this checkout adds `â€¢ :3001 â—
 | `/builds config remove [name]` | Stop auto-loading a project |
 | `/builds config build add [command]` | Track another build command, in every project or this one |
 | `/builds config build remove` | Stop tracking a build command |
+| `/builds config estimates [on\|off]` | Toggle how long running steps usually take (on by default) |
 | `/builds config edit` | Edit the JSON in OMP's editor, validated on save |
 
 ## Configuration
@@ -138,6 +139,8 @@ A **build** is one tool:
 | `label` | Shown before each step: `web test` |
 
 `builds` applies in every project; `projects[].builds` adds builds for one project. With no `builds` key, `cargo` is tracked with the steps `build`, `check`, `test`, `clippy`, `nextest`, `bench` and `doc`.
+
+`estimates` (default `true`) times passing steps and shows how long a running one usually takes; `false` stops both.
 
 | Project key | Meaning |
 | --- | --- |
