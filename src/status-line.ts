@@ -1,5 +1,5 @@
 import type { ExtensionContext } from '@oh-my-pi/pi-coding-agent';
-import { truncateToWidth } from '@oh-my-pi/pi-tui';
+import { truncateToWidth, visibleWidth } from '@oh-my-pi/pi-tui';
 import type { DevPin, DevState, Step, StepState } from './types';
 
 export type Theme = ExtensionContext['ui']['theme'];
@@ -63,7 +63,10 @@ export function devChip(theme: Theme, pin: DevPin): string {
 export const ownServers = (pin: DevPin, root: string | null) =>
 	pin.extras.filter(s => s.root !== null && s.root === root);
 
-/** One line: step chips, then the dev server and any server running from this checkout. */
+/**
+ * One line: step chips, newest first, then the dev server and any server running from this checkout.
+ * The servers always show; chips that do not fit are dropped from the end and counted as `+N`.
+ */
 export function statusLine(
 	theme: Theme,
 	width: number,
@@ -74,10 +77,23 @@ export function statusLine(
 ): string[] {
 	const dot = theme.fg('muted', ' • ');
 	const bar = theme.fg('muted', '  │  ');
-	const parts = steps.length ? [steps.map(s => chip(theme, s, frame)).join(dot)] : [];
-	if (pin) {
-		const own = ownServers(pin, root).map(s => `${theme.fg('muted', `:${s.port}`)} ${theme.fg('success', '●')}`);
-		parts.push([devChip(theme, pin), ...own].join(dot));
-	}
-	return [truncateToWidth(` ${parts.join(bar)}`, width)];
+	const servers = pin
+		? [
+				devChip(theme, pin),
+				...ownServers(pin, root).map(s => `${theme.fg('muted', `:${s.port}`)} ${theme.fg('success', '●')}`),
+			].join(dot)
+		: '';
+	const tail = servers ? `${bar}${servers}` : '';
+	const room = width - 1 - visibleWidth(tail);
+	const chips = steps.map(s => chip(theme, s, frame));
+	let shown = chips.length;
+	const fits = (n: number) => {
+		const more = n < chips.length ? `${dot}${theme.fg('muted', `+${chips.length - n}`)}` : '';
+		const line = n ? `${chips.slice(0, n).join(dot)}${more}` : more ? theme.fg('muted', `+${chips.length}`) : '';
+		return visibleWidth(line) <= room ? line : null;
+	};
+	let line = fits(shown);
+	while (line === null && shown > 0) line = fits(--shown);
+	const head = line ?? '';
+	return [truncateToWidth(` ${head}${head ? tail : servers}`, width)];
 }

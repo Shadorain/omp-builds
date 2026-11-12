@@ -146,26 +146,31 @@ export interface MergeOptions {
 	usual(step: string): number | null;
 }
 
-/** The latest outcome per step and checkout, ordered by when each first appeared. */
+/** The latest outcome per step and checkout, newest run first; a chain keeps its own order. */
 export function mergeSteps(runs: Run[], { mainRoot, currentTree, fixers, maxSteps, usual }: MergeOptions): Step[] {
 	const latest = new Map<string, Step>();
 	// Keys whose step failed in that checkout before the run now shown: a subagent rebuilding it is fixing it.
 	const failedBefore = new Set<string>();
-	const order: string[] = [];
+	const seen = new Map<string, { start: number; i: number }>();
 	for (const run of [...runs].sort((a, b) => a.start - b.start)) {
 		const root = run.root ?? mainRoot;
 		const where = root && root !== mainRoot ? basename(root) : null;
 		const current = root ? currentTree(root) : null;
 		const stale = run.state !== 'running' && !!run.tree && !!current && run.tree !== current;
-		for (const outcome of expand(run)) {
+		expand(run).forEach((outcome, i) => {
 			const key = where ? `${outcome.name}@${where}` : outcome.name;
-			if (!order.includes(key)) order.push(key);
+			seen.set(key, { start: run.start, i });
 			const prev = latest.get(key);
 			if (prev) failedBefore[prev.state === 'failed' ? 'add' : 'delete'](key);
 			latest.set(key, { ...outcome, where, root, stale, usual: usual(outcome.name) });
-		}
+		});
 	}
-	return order.slice(-maxSteps).map(key => {
+	const order = [...seen.keys()].sort((a, b) => {
+		const x = seen.get(a) as { start: number; i: number };
+		const y = seen.get(b) as { start: number; i: number };
+		return y.start - x.start || x.i - y.i;
+	});
+	return order.slice(0, maxSteps).map(key => {
 		const step = latest.get(key) as Step;
 		if (step.state === 'running' && step.kind === 'sub' && failedBefore.has(key)) return { ...step, state: 'fixing' };
 		if (step.state !== 'failed') return step;

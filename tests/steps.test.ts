@@ -151,9 +151,9 @@ describe('mergeSteps', () => {
 		];
 		const fixers = [{ who: 'Dash', start: 6_000, root: '/src/wt-ui' }];
 		expect(merge(runs, { currentTree: root => trees[root], fixers })).toEqual([
-			['test', 'passed', false],
-			['test@wt-api', 'failed', false],
 			['test@wt-ui', 'passed', true],
+			['test@wt-api', 'failed', false],
+			['test', 'passed', false],
 		]);
 		const apiFixer = [{ who: 'Fives', start: 6_000, root: '/src/wt-api' }];
 		expect(merge(runs, { currentTree: root => trees[root], fixers: apiFixer })[1]).toEqual([
@@ -176,9 +176,18 @@ describe('mergeSteps', () => {
 		expect(merge([run(sub)])).toEqual([['test', 'running', false]]);
 		expect(merge([failed, run(sub)])).toEqual([['test', 'fixing', false]]);
 		expect(merge([failed, run({ ...sub, root: '/src/wt-api' })])).toEqual([
-			['test', 'failed', false],
 			['test@wt-api', 'running', false],
+			['test', 'failed', false],
 		]);
+	});
+
+	test('the newest run comes first and keeps its chain order; a rerun moves its step to the front', () => {
+		const chain = run({ steps: ['check', 'test'], start: 0 });
+		const clippy = run({ steps: ['clippy'], start: 20 });
+		expect(merge([chain, clippy]).map(s => s[0])).toEqual(['clippy', 'check', 'test']);
+		const rerun = run({ steps: ['check'], start: 30 });
+		expect(merge([chain, clippy, rerun]).map(s => s[0])).toEqual(['check', 'clippy', 'test']);
+		expect(merge([chain, clippy, rerun], { maxSteps: 2 }).map(s => s[0])).toEqual(['check', 'clippy']);
 	});
 
 	test('a run that vanished without a status shows nothing', () => {
