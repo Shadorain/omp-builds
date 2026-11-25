@@ -1,5 +1,5 @@
 import type { ExtensionContext } from '@oh-my-pi/pi-coding-agent';
-import { truncateToWidth, visibleWidth } from '@oh-my-pi/pi-tui';
+import { truncate, visibleWidth } from '@oh-my-pi/pi-tui/text/width';
 import type { DevPin, DevState, Step, StepState } from './types';
 
 export type Theme = ExtensionContext['ui']['theme'];
@@ -95,5 +95,5 @@ export function statusLine(
 	let line = fits(shown);
 	while (line === null && shown > 0) line = fits(--shown);
 	const head = line ?? '';
-	return [truncateToWidth(` ${head}${head ? tail : servers}`, width)];
+	return [truncate(` ${head}${head ? tail : servers}`, width)];
 }

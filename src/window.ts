@@ -1,12 +1,14 @@
 import type { ExtensionContext } from '@oh-my-pi/pi-coding-agent';
-import { matchesKey } from '@oh-my-pi/pi-tui';
-import { OverlayPanel } from '@oh-my-pi/pi-tui/chrome';
 import type { Theme } from './status-line';
 
 const WIDGET = 'omp-builds-window';
 
 /** Draws the window's rows at a content width; called on every repaint, so it can show live data. */
-export type WindowBody = (theme: Theme, width: number) => readonly string[];
+export type WindowBody = (
+	ui: { requestRender(): void; size(): { readonly columns: number; readonly rows: number } },
+	theme: Theme,
+	width: number,
+) => readonly string[];
 
 export type WindowKind = 'summary' | 'status' | 'config';
 
@@ -17,9 +19,8 @@ let openKind: WindowKind | null = null;
 export const windowOpen = (kind: WindowKind) => openKind === kind;
 
 /**
- * A temporary window above the editor, built the way `/btw` builds its panel: an `OverlayPanel`
- * mounted in the layout instead of over it, so it never covers the editor. It takes no focus,
- * so typing keeps going to the prompt; Esc, caught from raw terminal input, closes it.
+ * A temporary window above the editor, implemented as a host widget so it never covers the editor.
+ * It takes no focus, so typing keeps going to the prompt.
  */
 export function openWindow(
 	ctx: ExtensionContext,
@@ -30,7 +31,7 @@ export function openWindow(
 ): void {
 	closeOpen?.();
 	const stopListening = ctx.ui.onTerminalInput(data => {
-		if (!matchesKey(data, 'escape')) return undefined;
+		if (data !== '\u001b') return undefined;
 		close();
 		onEscape?.();
 		return { consume: true };
@@ -47,14 +48,14 @@ export function openWindow(
 	openKind = kind;
 	ctx.ui.setWidget(
 		WIDGET,
-		(_tui, theme) => {
-			const panel = new OverlayPanel(title, 'omp.overlay.omp-builds');
-			panel.addChild({
-				render: (width: number) => [...body(theme, width), '', theme.fg('muted', 'esc close')],
-				invalidate() {},
-			});
-			return panel;
-		},
+		(ui, theme) => ({
+			render: (width: number) => [
+				theme.fg('accent', title),
+				...body(ui, theme, width),
+				'',
+				theme.fg('muted', 'esc close'),
+			],
+		}),
 		{ placement: 'aboveEditor' },
 	);
 }

@@ -125,11 +125,10 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 			ctx.ui.setWidget(
 				WIDGET,
 				want
-					? (tui, theme) => {
-							requestRender = () => tui.requestRender();
+					? (ui, theme) => {
+							requestRender = () => ui.requestRender();
 							return {
 								render: (width: number) => statusLine(theme, width, steps, pin, project?.root ?? null, frame),
-								invalidate() {},
 							};
 						}
 					: undefined,
@@ -380,7 +379,7 @@ export default function ompBuilds(pi: ExtensionAPI): void {
 					ctx,
 					'status',
 					`Builds · ${project?.name ?? ''}`,
-					(theme, width) => statusView(theme, width, runs, { mainRoot, currentTree, pin, frame, usual }),
+					(_ui, theme, width) => statusView(theme, width, runs, { mainRoot, currentTree, pin, frame, usual }),
 					under ? () => showSummary(ctx, under) : undefined,
 				);
 			}

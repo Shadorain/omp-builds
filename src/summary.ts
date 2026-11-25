@@ -1,6 +1,5 @@
 import type { ExtensionContext } from '@oh-my-pi/pi-coding-agent';
-import { Markdown } from '@oh-my-pi/pi-tui';
-import { getMarkdownTheme } from '@oh-my-pi/pi-tui/theme';
+import { renderMarkdown } from '@oh-my-pi/pi-tui/text/markdown/index';
 import type { Summary } from './types';
 import { openWindow } from './window';
 
@@ -39,10 +38,9 @@ const when = (at: string) =>
 
 /** Show `summary` as markdown in the temporary window until Esc. */
 export function openSummary(ctx: ExtensionContext, summary: Summary): void {
-	const body = new Markdown(summary.text, 0, 0, getMarkdownTheme());
-	openWindow(ctx, 'summary', `Work summary · ${when(summary.at)}`, (theme, width) => {
-		const lines = body.render(width);
-		const max = Math.max(MIN_ROWS, (process.stdout.rows ?? 40) - RESERVED_ROWS);
+	openWindow(ctx, 'summary', `Work summary · ${when(summary.at)}`, (ui, theme, width) => {
+		const lines = renderMarkdown(summary.text, width, { theme });
+		const max = Math.max(MIN_ROWS, ui.size().rows - RESERVED_ROWS);
 		if (lines.length <= max) return lines;
 		const more = lines.length - max + 1;
 		return [...lines.slice(0, max - 1), theme.fg('muted', `… ${more} more lines in the reply above`)];

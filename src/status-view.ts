@@ -1,5 +1,5 @@
 import { basename } from 'node:path';
-import { truncateToWidth } from '@oh-my-pi/pi-tui';
+import { truncate } from '@oh-my-pi/pi-tui/text/width';
 import { clock, devChip, span, type Theme } from './status-line';
 import type { DevPin, DevServer, DevState, Run, RunState } from './types';
 
@@ -67,7 +67,7 @@ function badge(theme: Theme, state: RunState, frame: number): string {
 	}
 }
 
-const cell = (text: string, width: number) => truncateToWidth(text, width, undefined, true);
+const cell = (text: string, width: number) => truncate(text, width, undefined, true);
 
 /** A running run's time so far over its steps' usual total, once every step has passed before. */
 function took(run: Run, usual: (step: string) => number | null): string {
@@ -82,7 +82,7 @@ export function statusView(theme: Theme, width: number, runs: Run[], options: St
 	const { mainRoot, currentTree, pin, frame, usual } = options;
 	const dev = pin ? devRows(theme, pin, mainRoot) : [];
 	if (!runs.length) {
-		return [theme.fg('muted', 'No builds tracked in this session yet.'), ...dev].map(l => truncateToWidth(l, width));
+		return [theme.fg('muted', 'No builds tracked in this session yet.'), ...dev].map(l => truncate(l, width));
 	}
 	const running = runs.filter(r => r.state === 'running');
 	const agents = new Set(running.map(r => `${r.kind}:${r.who}`)).size;
@@ -122,5 +122,5 @@ export function statusView(theme: Theme, width: number, runs: Run[], options: St
 			code,
 		].join('  ');
 	});
-	return [header, '', columns, ...rows, ...dev].map(line => truncateToWidth(line, width));
+	return [header, '', columns, ...rows, ...dev].map(line => truncate(line, width));
 }

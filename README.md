@@ -7,7 +7,7 @@
 <p>Background builds and a live build status line for OMP.</p>
 
 <p>
-  <a href="https://github.com/can1357/oh-my-pi"><img src="https://img.shields.io/badge/OMP-18.18.6%2B-6fd3a0?style=for-the-badge" alt="OMP 18.18.6 or later"></a>
+  <a href="https://github.com/can1357/oh-my-pi"><img src="https://img.shields.io/badge/OMP-19.2.1%2B-6fd3a0?style=for-the-badge" alt="OMP 19.2.1 or later"></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-f9f1e1?style=for-the-badge&amp;logo=bun&amp;logoColor=f9f1e1" alt="Bun runtime"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-e6c36a?style=for-the-badge" alt="MIT license"></a>
 </p>
@@ -47,7 +47,7 @@ An [OMP](https://github.com/can1357/oh-my-pi) extension that keeps your agent's 
 
 ## Requirements
 
-- OMP 18.18.6 or later.
+- **OMP 19.2.1 or later.**
 - Linux: running builds and servers are read from `/proc`, `ss` and `systemctl --user`.
 - Git.
 - Optional: [Tailscale](https://tailscale.com/) for dev-server links (`https://` when `tailscale serve` fronts the port).

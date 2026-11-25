@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { type ExtensionContext, z } from '@oh-my-pi/pi-coding-agent';
-import { truncateToWidth } from '@oh-my-pi/pi-tui';
+import { truncate } from '@oh-my-pi/pi-tui/text/width';
 import {
 	asList,
 	type BuildConfig,
@@ -78,7 +78,7 @@ function configView(theme: Theme, width: number, loaded: LoadedConfig, here: str
 		);
 	}
 	lines.push('', muted(CONFIG_USAGE.replace('Usage: ', '')));
-	return lines.map(l => truncateToWidth(l, width));
+	return lines.map(l => truncate(l, width));
 }
 
 async function save(ctx: ExtensionContext, config: Config, done: string, onChange: () => Promise<void>) {
@@ -257,7 +257,7 @@ export async function configCommand(
 	const loaded = await loadConfig();
 	const [verb, ...rest] = args;
 	if (!verb) {
-		return openWindow(ctx, 'config', 'omp-builds config', (theme, width) => configView(theme, width, loaded, here));
+		return openWindow(ctx, 'config', 'omp-builds config', (_ui, theme, width) => configView(theme, width, loaded, here));
 	}
 	// A broken file can only be repaired as a whole; quick edits would overwrite it with defaults.
 	const config = loaded.issues.length ? null : loaded.config;
